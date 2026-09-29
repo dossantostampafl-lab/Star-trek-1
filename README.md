@@ -40,6 +40,24 @@ git clone https://github.com/dossantostampafl-lab/Star-trek-1.git /opt/star-trek
 cd /opt/star-trek-1 && sudo bash deploy/oracle/setup.sh
 ```
 
+## Tripulação pronta
+
+Na primeira vez que a estação liga, ela já embarca a tripulação completa (desligue com `SEED_CREW=0`):
+
+| Tripulante | Função |
+| --- | --- |
+| ★ **Capitão** | recebe seus pedidos, delega com `pass_work` e **recruta especialistas** novos quando precisa (`recruit`) |
+| **Pesquisadora** | busca na web (`web_search`) e lê as páginas (`fetch_url`), sempre com fontes |
+| **Redator** | transforma a pesquisa em texto claro |
+| **Revisor** | confere, corrige e entrega a versão final |
+| **Engenheira** | escreve e testa código (terminal em container) |
+
+Esteiras: Capitão → todos (manual) · Pesquisadora → Redator → Revisor → Capitão (automáticas) · Engenheira → Revisor.
+Agenda: dias úteis às 9h a Pesquisadora traz as novidades de agentes de IA. Numa estação que já tem tripulantes,
+use o botão **Embarcar** (aba Tripulação) — ele só cria o que falta.
+
+Fale só com o Capitão: o pedido percorre a esteira sozinho e o resumo final volta para ele.
+
 ## Usando a estação
 
 | Aba | Para quê |

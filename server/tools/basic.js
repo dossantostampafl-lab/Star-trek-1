@@ -42,6 +42,48 @@ const fetchUrl = {
   }
 };
 
+/* Busca na web sem chave de API: usa a versão HTML do DuckDuckGo. Pode falhar se o DuckDuckGo pedir
+   verificação anti-robô; nesse caso o agente recebe o aviso e pode usar fetch_url num site conhecido. */
+const webSearch = {
+  name: 'web_search',
+  scope: 'network',
+  description: 'Busca na web e devolve até 8 resultados (título, link e trecho). Depois use fetch_url para ler a página.',
+  parameters: { type: 'object', properties: { query: { type: 'string', description: 'O que buscar' } }, required: ['query'] },
+  async run(args, ctx) {
+    const q = String(args.query || '').trim().slice(0, 300);
+    if (!q) throw new Error('busca vazia');
+    const res = await fetch('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(q) + '&kl=br-pt', {
+      headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) StarTrek1-Agent/0.2', 'accept-language': 'pt-BR,pt;q=0.9,en;q=0.8' },
+      signal: ctx.signal || AbortSignal.timeout(20000)
+    });
+    if (!res.ok) throw new Error('busca respondeu HTTP ' + res.status + ' — tente fetch_url num site conhecido');
+    const results = parseDuckResults(await res.text());
+    if (!results.length) return 'Nenhum resultado (ou a busca pediu verificação anti-robô). Tente outras palavras ou fetch_url num site conhecido.';
+    return results.map((r, i) => (i + 1) + '. ' + r.title + '\n   ' + r.url + (r.snippet ? '\n   ' + r.snippet : '')).join('\n');
+  }
+};
+
+function decodeEntities(s) {
+  return String(s).replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function parseDuckResults(html) {
+  const out = [];
+  const re = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>([\s\S]*?)(?=<a[^>]*class="[^"]*result__a|$)/g;
+  let m;
+  while ((m = re.exec(html)) && out.length < 8) {
+    let url = m[1].replace(/&amp;/g, '&');
+    const uddg = url.match(/[?&]uddg=([^&]+)/);
+    if (uddg) url = decodeURIComponent(uddg[1]);
+    if (url.startsWith('//')) url = 'https:' + url;
+    if (!/^https?:\/\//.test(url) || /duckduckgo\.com\/y\.js/.test(url)) continue;   // anúncios
+    const sn = m[3].match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/);
+    out.push({ title: decodeEntities(m[2]), url, snippet: sn ? decodeEntities(sn[1]).slice(0, 300) : '' });
+  }
+  return out;
+}
+
 function isPrivateHost(h) {
   h = h.replace(/^\[|\]$/g, '').toLowerCase();
   return h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h === '0.0.0.0' || h === '::1' ||
@@ -58,4 +100,4 @@ function htmlToText(html) {
     .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
 }
 
-module.exports = { getTime, fetchUrl, isPrivateHost, htmlToText };
+module.exports = { getTime, fetchUrl, webSearch, parseDuckResults, isPrivateHost, htmlToText };

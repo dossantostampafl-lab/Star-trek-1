@@ -58,6 +58,8 @@ function getConfig(env) {
     shellImage: env.SHELL_IMAGE || 'alpine:3.20',
     shellNetwork: env.SHELL_NETWORK === 'bridge' ? 'bridge' : 'none',
     maxConcurrent: Math.max(1, Number(env.MAX_CONCURRENT) || 3),
+    // Cria a tripulação pronta (Capitão, Pesquisadora, Redator, Revisor, Engenheira) na primeira vez. 0 = desliga.
+    seedCrew: env.SEED_CREW !== '0',
     // Acesso pela internet (Oracle Cloud etc.): endereço público e senha de acesso
     publicUrl: (env.PUBLIC_URL || '').trim().replace(/\/+$/, ''),
     accessPassword: env.ACCESS_PASSWORD || ''

@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const { createAgent } = require('./agent.js');
 const { makeShellTool } = require('./tools/shell.js');
 const { costOf } = require('./cost.js');
+const crew = require('./crew.js');
 
 const MAX_HISTORY = 80;     // mensagens guardadas por agente
 const MAX_CHAIN = 5;        // saltos máximos numa cadeia de esteiras (evita ciclo infinito)
@@ -39,8 +40,9 @@ function makeStation(deps) {
     return {
       name: 'pass_work',
       scope: 'read',
-      description: 'Passa uma tarefa para outro agente ligado a você por esteira. Use o nome dele. ' +
-        'Destinos possíveis: ' + (db.conveyorsFrom(agent.id).map(c => (db.getAgent(c.to_agent) || {}).name).filter(Boolean).join(', ') || '(nenhum — sem esteiras saindo de você)'),
+      description: 'Passa uma tarefa para outro tripulante ligado a você por esteira. Use o nome dele. ' +
+        'Destinos possíveis: ' + (db.conveyorsFrom(agent.id).map(c => db.getAgent(c.to_agent)).filter(Boolean)
+          .map(t => t.name + (t.role ? ' (' + t.role + ')' : '')).join('; ') || '(nenhum — sem esteiras saindo de você)'),
       parameters: { type: 'object', properties: { to: { type: 'string', description: 'Nome do agente de destino' }, task: { type: 'string', description: 'O que ele deve fazer, com todo o contexto necessário' } }, required: ['to', 'task'] },
       run(args, ctx) {
         const targets = db.conveyorsFrom(agent.id).map(c => db.getAgent(c.to_agent)).filter(Boolean);
@@ -55,12 +57,46 @@ function makeStation(deps) {
     };
   }
 
+  // Só o Capitão: recruta um especialista novo e já liga uma esteira (manual) dele até o recruta.
+  function recruitTool(captain) {
+    return {
+      name: 'recruit',
+      scope: 'read',
+      description: 'Recruta um novo tripulante especialista quando nenhum da equipe serve para a tarefa. ' +
+        'Depois use pass_work com o nome dele para mandar a tarefa. Máximo de ' + crew.MAX_CREW + ' tripulantes.',
+      parameters: { type: 'object', properties: {
+        name: { type: 'string', description: 'Nome curto (ex.: Analista de Dados)' },
+        role: { type: 'string', description: 'Função em uma frase' },
+        instructions: { type: 'string', description: 'Como ele deve trabalhar e entregar' }
+      }, required: ['name', 'role'] },
+      run(args) {
+        const name = String(args.name || '').trim().slice(0, 40);
+        if (!name) throw new Error('dê um nome ao recruta');
+        const all = db.listAgents();
+        const same = all.find(a => a.name.toLowerCase() === name.toLowerCase());
+        if (same) throw new Error(same.name + ' já está na tripulação — use pass_work com esse nome');
+        if (all.length >= crew.MAX_CREW) throw new Error('tripulação cheia (' + crew.MAX_CREW + '). Use quem já existe.');
+        const a = db.createAgent(Object.assign(crew.freeRoom(db), {
+          name, role: String(args.role || '').slice(0, 200), instructions: String(args.instructions || '').slice(0, 4000), color: crew.nextColor(db)
+        }));
+        db.createConveyor({ from_agent: captain.id, to_agent: a.id, auto: false, note: 'recrutado pelo Capitão' });
+        const reviewer = all.find(x => x.name.toLowerCase() === 'revisor');
+        if (reviewer) { try { db.createConveyor({ from_agent: a.id, to_agent: reviewer.id, auto: true, note: 'trabalho do recruta vai para revisão' }); } catch (_) { /* já existe */ } }
+        invalidate(captain.id);
+        bus.emit({ type: 'state_changed' });
+        bus.emit({ type: 'recruited', agentId: a.id, by: captain.id, name: a.name });
+        return a.name + ' recrutado(a) como "' + a.role + '". Agora use pass_work com to="' + a.name + '".';
+      }
+    };
+  }
+
   function runtime(agentId) {
     if (runtimes.has(agentId)) return runtimes.get(agentId);
     const a = db.getAgent(agentId);
     if (!a) throw new Error('agente não encontrado');
     const workspace = workspaceOf(a.id);
     const extraTools = [passWorkTool(a)];
+    if (a.captain) extraTools.push(recruitTool(a));
     if (a.shell && deps.shellAvailable) extraTools.push(makeShellTool({ workspaceFor: () => workspace, image: config.shellImage, network: config.shellNetwork, runner: deps.shellRunner }));
     if (deps.mcp) for (const t of deps.mcp.toolsFor(a.mcp || [])) extraTools.push(t);
     const rt = createAgent(config, {

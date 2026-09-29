@@ -28,7 +28,7 @@ function scripted(scripts, seen) {
 
 async function boot(scripts, extra) {
   const dir = tmp();
-  const config = getConfig({ WORKSPACE: path.join(dir, 'ws'), DATA_DIR: path.join(dir, 'data'), MAX_STEPS: '5' });
+  const config = getConfig({ WORKSPACE: path.join(dir, 'ws'), DATA_DIR: path.join(dir, 'data'), MAX_STEPS: '5', SEED_CREW: extra && extra.seed ? '1' : '0' });
   const shellCalls = [];
   const seen = [];
   const srv = await start(Object.assign({
@@ -304,5 +304,93 @@ test('checkpoints pela API: lista e restaura a pasta do agente', async () => {
     assert.equal(cps.length, 1);
     assert.equal((await t.api('POST', '/api/agents/' + A.id + '/checkpoints/' + cps[0].id + '/restore')).status, 200);
     assert.equal(fs.readFileSync(path.join(ws, 'a.txt'), 'utf8'), 'original');
+  } finally { await t.close(); }
+});
+
+// ---------------- tripulação pronta e Capitão ----------------
+const { applyPreset } = require('../server/crew.js');
+const { openDb } = require('../server/db.js');
+
+test('tripulação pronta: cria agentes, esteiras e agenda — e não duplica', () => {
+  const db = openDb(':memory:');
+  const r1 = applyPreset(db);
+  assert.deepEqual(r1.created, ['Capitão', 'Pesquisadora', 'Redator', 'Revisor', 'Engenheira']);
+  assert.equal(r1.conveyors, 8);
+  assert.equal(r1.schedules, 1);
+  const cap = db.listAgents().find(a => a.name === 'Capitão');
+  assert.equal(cap.captain, true);
+  assert.equal(db.listAgents().find(a => a.name === 'Engenheira').shell, true);
+  const rooms = new Set(db.listAgents().map(a => a.room_x + ',' + a.room_y));
+  assert.equal(rooms.size, 5, 'cada um na sua sala');
+  const r2 = applyPreset(db);
+  assert.deepEqual(r2, { created: [], conveyors: 0, schedules: 0 });
+  assert.equal(db.listAgents().length, 5);
+});
+
+test('primeira inicialização embarca a tripulação; banco com agentes não é mexido', async () => {
+  const t = await boot({}, { seed: true });
+  try {
+    const st = (await t.api('GET', '/api/state')).body;
+    assert.equal(st.agents.length, 5);
+    assert.equal(st.conveyors.length, 8);
+    assert.equal(st.schedules.length, 1);
+    assert.equal((await t.api('POST', '/api/crew/preset')).body.created.length, 0);
+  } finally { await t.close(); }
+});
+
+test('Capitão: delega, a esteira roda sozinha e o resultado volta para ele', async () => {
+  const t = await boot({
+    'Capitão': [
+      { tools: [{ name: 'pass_work', args: { to: 'Pesquisadora', task: 'pesquise X' } }] }, { text: 'Mandei para a Pesquisadora.' },
+      { text: 'Resumo final: X confirmado.' }
+    ],
+    Pesquisadora: [{ text: 'Fatos sobre X com fontes.' }],
+    Redator: [{ text: 'Texto sobre X.' }],
+    Revisor: [{ text: 'Versão final sobre X.' }]
+  }, { seed: true });
+  try {
+    const st = (await t.api('GET', '/api/state')).body;
+    const cap = st.agents.find(a => a.captain);
+    const capTools = [];
+    await t.api('POST', '/api/agents/' + cap.id + '/message', { text: 'quero um relatório sobre X' });
+    const byName = Object.fromEntries(st.agents.map(a => [a.name, a.id]));
+    await t.waitFor(e => e.type === 'run_end' && e.agentId === byName.Revisor, 6000);
+    const final = await t.waitFor(e => e.type === 'run_end' && e.agentId === cap.id && e.output === 'Resumo final: X confirmado.', 6000);
+    assert.equal(final.status, 'done');
+    const order = t.events.filter(e => e.type === 'run_start').map(e => st.agents.find(a => a.id === e.agentId).name);
+    assert.deepEqual(order, ['Capitão', 'Pesquisadora', 'Redator', 'Revisor', 'Capitão']);
+    const capSeen = t.seen.find(s => s.agent === 'Capitão');
+    assert.ok(capSeen.tools.includes('recruit'), 'capitão tem recruit');
+    assert.ok(!t.seen.find(s => s.agent === 'Redator').tools.includes('recruit'), 'só o capitão recruta');
+    void capTools;
+  } finally { await t.close(); }
+});
+
+test('Capitão recruta um especialista novo e manda trabalho para ele', async () => {
+  const t = await boot({
+    'Capitão': [
+      { tools: [{ name: 'recruit', args: { name: 'Analista', role: 'analisa planilhas', instructions: 'use tabelas' } }] },
+      { tools: [{ name: 'pass_work', args: { to: 'Analista', task: 'analise as vendas' } }] },
+      { text: 'Recrutei a Analista e passei a tarefa.' },
+      { text: 'Resumo final.' }
+    ],
+    Analista: [{ text: 'Vendas subiram 10%.' }],
+    Revisor: [{ text: 'Revisado.' }]
+  }, { seed: true });
+  try {
+    const cap = (await t.api('GET', '/api/state')).body.agents.find(a => a.captain);
+    await t.api('POST', '/api/agents/' + cap.id + '/message', { text: 'analise minhas vendas' });
+    const rec = await t.waitFor(e => e.type === 'recruited', 6000);
+    assert.equal(rec.name, 'Analista');
+    const endA = await t.waitFor(e => e.type === 'run_end' && e.agentId === rec.agentId, 6000);
+    assert.equal(endA.output, 'Vendas subiram 10%.');
+    const st = (await t.api('GET', '/api/state')).body;
+    assert.equal(st.agents.length, 6);
+    const a = st.agents.find(x => x.name === 'Analista');
+    assert.ok(st.conveyors.some(c => c.from_agent === cap.id && c.to_agent === a.id && !c.auto));
+    assert.ok(st.conveyors.some(c => c.from_agent === a.id && c.auto), 'trabalho do recruta segue para revisão');
+    // recrutar de novo o mesmo nome falha
+    const results = t.events.filter(e => e.type === 'agent_event' && e.event.type === 'tool_result' && e.agentId === cap.id).map(e => e.event);
+    assert.equal(results[0].ok, true);
   } finally { await t.close(); }
 });

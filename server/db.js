@@ -62,13 +62,15 @@ function openDb(file) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  // migração: coluna "captain" (versões antigas do banco não têm)
+  if (!db.prepare("PRAGMA table_info(agents)").all().some(c => c.name === 'captain')) db.exec('ALTER TABLE agents ADD COLUMN captain INTEGER DEFAULT 0');
 
   const q = (sql) => db.prepare(sql);
   const json = (s, d) => { try { return JSON.parse(s); } catch (_) { return d; } };
   const plain = (r) => r ? Object.assign({}, r) : null;
-  const agentRow = (r) => r && Object.assign(plain(r), { shell: !!r.shell, mcp: json(r.mcp, []) });
+  const agentRow = (r) => r && Object.assign(plain(r), { shell: !!r.shell, captain: !!r.captain, mcp: json(r.mcp, []) });
 
-  const AGENT_FIELDS = ['name', 'role', 'instructions', 'provider', 'model', 'color', 'room_x', 'room_y', 'budget_usd', 'shell', 'mcp'];
+  const AGENT_FIELDS = ['name', 'role', 'instructions', 'provider', 'model', 'color', 'room_x', 'room_y', 'budget_usd', 'shell', 'captain', 'mcp'];
 
   const api = {
     raw: db,
@@ -78,17 +80,17 @@ function openDb(file) {
     getAgent: (id) => agentRow(q('SELECT * FROM agents WHERE id = ?').get(id)),
     createAgent(a) {
       const id = a.id || newId('ag');
-      q(`INSERT INTO agents (id, name, role, instructions, provider, model, color, room_x, room_y, budget_usd, shell, mcp, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      q(`INSERT INTO agents (id, name, role, instructions, provider, model, color, room_x, room_y, budget_usd, shell, captain, mcp, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, String(a.name || 'Tripulante').slice(0, 40), a.role || '', a.instructions || '', a.provider || '', a.model || '',
-        a.color || '#5ec8ff', a.room_x | 0, a.room_y | 0, Number(a.budget_usd) || 0, a.shell ? 1 : 0, JSON.stringify(a.mcp || []), now());
+        a.color || '#5ec8ff', a.room_x | 0, a.room_y | 0, Number(a.budget_usd) || 0, a.shell ? 1 : 0, a.captain ? 1 : 0, JSON.stringify(a.mcp || []), now());
       return api.getAgent(id);
     },
     updateAgent(id, patch) {
       const sets = [], vals = [];
       for (const k of AGENT_FIELDS) if (patch[k] !== undefined) {
         sets.push(k + ' = ?');
-        vals.push(k === 'shell' ? (patch[k] ? 1 : 0) : k === 'mcp' ? JSON.stringify(patch[k] || []) : k === 'name' ? String(patch[k]).slice(0, 40) : patch[k]);
+        vals.push((k === 'shell' || k === 'captain') ? (patch[k] ? 1 : 0) : k === 'mcp' ? JSON.stringify(patch[k] || []) : k === 'name' ? String(patch[k]).slice(0, 40) : patch[k]);
       }
       if (sets.length) q('UPDATE agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...vals, id);
       return api.getAgent(id);

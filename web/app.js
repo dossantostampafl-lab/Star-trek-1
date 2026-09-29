@@ -56,7 +56,7 @@
     try {
       Object.assign(S, await api('GET', '/api/state'));
       if (selected && !S.agents.some(a => a.id === selected)) selected = null;
-      if (!selected && S.agents.length) selected = S.agents[0].id;
+      if (!selected && S.agents.length) selected = (S.agents.find(a => a.captain) || S.agents[0]).id;
       renderAll();
     } catch (e) { toast('Falha ao ler a estação: ' + e.message, true); }
   }
@@ -92,7 +92,7 @@
       box.append(h('div', { class: 'item' + (a.id === selected ? ' sel' : '') },
         h('span', { class: 'swatch', style: 'background:' + a.color + ';color:' + a.color }),
         h('div', { class: 'grow' },
-          h('div', { class: 'title', text: a.name }),
+          h('div', { class: 'title' }, a.captain ? h('span', { class: 'badge-cap', text: '★', title: 'Capitão' }) : null, a.name),
           h('div', { class: 'sub', text: [a.role || 'sem função definida', (a.provider || 'padrão') + (a.model ? '/' + a.model : ''), a.shell ? 'terminal' : '', (a.mcp || []).length ? (a.mcp.length + ' conector(es)') : '', a.budget_usd > 0 ? usd(a.spent_usd) + ' de ' + usd(a.budget_usd) : (a.spent_usd > 0 ? usd(a.spent_usd) : '')].filter(Boolean).join(' · ') })),
         h('span', { class: 'state' + (st.busy ? ' busy' : ''), text: st.busy ? 'trabalhando' : st.queued ? st.queued + ' na fila' : 'livre' }),
         h('button', { class: 'btn small', text: 'Falar', onclick: () => openChat(a.id) }),
@@ -150,6 +150,13 @@
     await refresh();
   }));
   $('#agent-cancel').addEventListener('click', resetAgentForm);
+  $('#crew-preset').addEventListener('click', safe(async () => {
+    const r = await api('POST', '/api/crew/preset');
+    toast(r.created.length ? 'Embarcaram: ' + r.created.join(', ') + '.' : 'A tripulação pronta já está completa.');
+    await refresh();
+    const cap = S.agents.find(a => a.captain);
+    if (cap) openChat(cap.id);
+  }));
   $('#agent-delete').addEventListener('click', safe(async () => {
     if (!editing || !confirm('Dispensar ' + editing.name + '? O histórico, a agenda e as esteiras dele serão apagados (a pasta de arquivos fica).')) return;
     await api('DELETE', '/api/agents/' + editing.id);
@@ -466,6 +473,7 @@
         break;
       }
       case 'warning': toast(ev.message, true); break;
+      case 'recruited': toast(agentName(ev.by) + ' recrutou ' + ev.name + '.'); refreshSoon(); break;
       case 'schedule_fired': toast('Agenda: tarefa enviada para ' + agentName(ev.agentId) + '.'); break;
       default: break;
     }

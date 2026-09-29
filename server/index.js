@@ -15,6 +15,7 @@ const { makeScheduler, nextRun, describe } = require('./cron.js');
 const { makeMcpManager } = require('./mcp.js');
 const { dockerAvailable } = require('./tools/shell.js');
 const { makeAuth } = require('./auth.js');
+const crew = require('./crew.js');
 
 const WEB = path.join(ROOT, 'web');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -51,6 +52,11 @@ async function start(overrides) {
   const db = overrides.db || openDb(path.join(config.dataDir, 'star-trek-1.db'));
   db.failStaleRuns();
   const bus = makeBus();
+  // Primeira vez (banco vazio): a tripulação pronta já embarca, com esteiras e agenda.
+  if (config.seedCrew && !db.listAgents().length) {
+    const r = crew.applyPreset(db);
+    log('tripulação pronta: ' + r.created.join(', '));
+  }
 
   // ---- permissões: pedidos vão para a interface; sem interface aberta = negado
   const pendingConsent = new Map();
@@ -153,16 +159,13 @@ async function start(overrides) {
     if (b.room_y !== undefined) out.room_y = Math.max(0, Math.min(20, b.room_y | 0));
     if (b.budget_usd !== undefined) out.budget_usd = Math.max(0, Number(b.budget_usd) || 0);
     if (b.shell !== undefined) out.shell = !!b.shell;
+    if (b.captain !== undefined) out.captain = !!b.captain;
     if (b.mcp !== undefined) out.mcp = Array.isArray(b.mcp) ? b.mcp.map(String).slice(0, 20) : [];
     if (!partial && !out.name) throw httpErr(400, 'dê um nome ao agente');
     return out;
   }
 
-  function freeRoom() {
-    const used = new Set(db.listAgents().map(a => a.room_x + ',' + a.room_y));
-    for (let y = 0; y < 20; y++) for (let x = 0; x < 4; x++) if (!used.has(x + ',' + y)) return { room_x: x, room_y: y };
-    return { room_x: 0, room_y: 0 };
-  }
+  const freeRoom = () => crew.freeRoom(db);
 
   async function handle(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -248,6 +251,14 @@ async function start(overrides) {
     }
 
     if (p === '/api/runs' && m === 'GET') return sendJson(res, 200, db.listRuns(url.searchParams.get('agent'), Math.min(200, Number(url.searchParams.get('limit')) || 50)));
+
+    // ---- tripulação pronta
+    if (p === '/api/crew/preset' && m === 'POST') {
+      const r = crew.applyPreset(db);
+      station.invalidate();
+      bus.emit({ type: 'state_changed' });
+      return sendJson(res, 200, r);
+    }
 
     // ---- esteiras
     if (seg[0] === 'conveyors') {

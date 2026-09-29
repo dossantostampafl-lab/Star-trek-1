@@ -5,7 +5,7 @@ const { buildProvider } = require('./providers/index.js');
 const { providerConfig } = require('./config.js');
 const { makeRegistry } = require('./tools/registry.js');
 const { fsTools } = require('./tools/fs.js');
-const { getTime, fetchUrl } = require('./tools/basic.js');
+const { getTime, fetchUrl, webSearch } = require('./tools/basic.js');
 const { runAgent } = require('./loop.js');
 
 function systemPrompt(profile) {
@@ -13,7 +13,7 @@ function systemPrompt(profile) {
   const lines = [
     'Você é ' + (profile.name || 'Tripulante') + ', um agente da estação Star Trek 1.' + (profile.role ? ' Sua função: ' + profile.role + '.' : ''),
     'Responda em português do Brasil, de forma direta.',
-    'Use ferramentas quando precisar de fatos (data/hora, páginas web) ou de arquivos.',
+    'Use ferramentas quando precisar de fatos (data/hora, busca na web, páginas) ou de arquivos.',
     'Arquivos só existem dentro da sua pasta de trabalho; use caminhos relativos.',
     'Se uma permissão for negada, não insista: siga de outro jeito ou explique.',
     'Quando a tarefa estiver concluída, responda sem chamar ferramentas.'
@@ -46,7 +46,7 @@ function createAgent(config, opts) {
   const workspace = opts.workspace || config.workspace;
   const provider = opts.provider || buildProvider(agentProviderConfig(config, profile), { log: opts.log, retries: opts.retries });
   const registry = makeRegistry();
-  for (const t of [getTime, fetchUrl, ...fsTools(workspace), ...(opts.extraTools || [])]) registry.register(t);
+  for (const t of [getTime, webSearch, fetchUrl, ...fsTools(workspace), ...(opts.extraTools || [])]) registry.register(t);
 
   const messages = [{ role: 'system', content: opts.system || systemPrompt(profile) }];
   if (opts.history) messages.push(...opts.history);

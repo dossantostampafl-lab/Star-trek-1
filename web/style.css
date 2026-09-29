@@ -154,3 +154,8 @@ h4 { margin: 8px 0 0; font-size: 12px; letter-spacing: .1em; text-transform: upp
 .toast.bad { border-color: var(--red); color: var(--red); }
 
 @media (prefers-reduced-motion: reduce) { .cursor::after, .btn.listening { animation: none; } }
+
+.preset { display: flex; gap: 12px; align-items: center; }
+.preset .grow { flex: 1; }
+.preset p { margin-top: 2px; }
+.badge-cap { color: var(--amber); margin-right: 4px; }

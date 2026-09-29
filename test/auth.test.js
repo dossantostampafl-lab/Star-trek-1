@@ -29,7 +29,7 @@ function req(url, method, p, headers, body) {
 
 async function boot(extra) {
   const dir = tmp();
-  const config = getConfig(Object.assign({ WORKSPACE: dir + '/ws', DATA_DIR: dir + '/data', PUBLIC_URL: 'https://estacao.sslip.io', ACCESS_PASSWORD: PW }, extra || {}));
+  const config = getConfig(Object.assign({ SEED_CREW: '0', WORKSPACE: dir + '/ws', DATA_DIR: dir + '/data', PUBLIC_URL: 'https://estacao.sslip.io', ACCESS_PASSWORD: PW }, extra || {}));
   return start({ config, port: 0, log: () => {}, shellAvailable: false });
 }
 
@@ -104,7 +104,7 @@ test('sessão sobrevive a reinício e cai se a senha mudar', () => {
 
 test('uso local continua sem senha', async () => {
   const dir = tmp();
-  const srv = await start({ config: getConfig({ WORKSPACE: dir + '/ws', DATA_DIR: dir + '/data' }), port: 0, log: () => {}, shellAvailable: false });
+  const srv = await start({ config: getConfig({ SEED_CREW: '0', WORKSPACE: dir + '/ws', DATA_DIR: dir + '/data' }), port: 0, log: () => {}, shellAvailable: false });
   try {
     const r = await fetch(srv.url + '/');
     assert.equal(r.status, 200);

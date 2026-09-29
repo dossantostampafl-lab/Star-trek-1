@@ -148,3 +148,15 @@ test('fetch_url bloqueia endereços locais', () => {
   for (const h of ['localhost', '127.0.0.1', '10.1.2.3', '192.168.0.10', '172.20.0.1', '169.254.169.254', '::1']) assert.ok(isPrivateHost(h), h);
   assert.ok(!isPrivateHost('example.com'));
 });
+
+test('web_search: lê os resultados do DuckDuckGo (links reais, sem anúncios)', () => {
+  const { parseDuckResults } = require('../server/tools/basic.js');
+  const html = '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexemplo.com%2Fa%3Fx%3D1&amp;rut=z">Título <b>A</b></a>' +
+    '<a class="result__snippet" href="#">Trecho &amp; mais</a>' +
+    '<a class="result__a" href="https://duckduckgo.com/y.js?ad=1">Anúncio</a>' +
+    '<a class="result__a" href="https://b.com/">B</a>';
+  const r = parseDuckResults(html);
+  assert.deepEqual(r.map(x => x.url), ['https://exemplo.com/a?x=1', 'https://b.com/']);
+  assert.equal(r[0].title, 'Título A');
+  assert.equal(r[0].snippet, 'Trecho & mais');
+});
