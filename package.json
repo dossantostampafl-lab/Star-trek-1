@@ -1,0 +1,21 @@
+{
+  "name": "star-trek-1",
+  "version": "0.2.0",
+  "description": "Star Trek 1 — estação de agentes de IA enxuta, com FreeLLMAPI como provedor padrão (custo zero).",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "startrek": "cli.js"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "chat": "node cli.js",
+    "ask": "node cli.js --once",
+    "check": "node cli.js --check",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {}
+}

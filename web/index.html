@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="st1-token" content="__ST1_TOKEN__">
+<title>Star Trek 1 — Estação</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-star">★</span> STAR TREK 1 <span class="brand-sub">estação de agentes</span></div>
+  <div class="instruments">
+    <span class="chip" id="chip-provider" title="Provedor padrão">—</span>
+    <span class="chip" id="chip-cost" title="Custo total registrado">US$ 0.00</span>
+    <span class="chip" id="chip-shell" title="Terminal em container">terminal —</span>
+    <span class="chip chip-link" id="chip-conn" title="Conexão com a estação">● offline</span>
+    <button class="chip chip-btn" id="chip-logout" hidden title="Sair desta estação">sair</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="deck" aria-label="Mapa da estação">
+    <canvas id="station" aria-label="Estação: salas dos agentes e esteiras"></canvas>
+    <div class="deck-hint" id="deck-hint">Toque numa sala para falar com o tripulante.</div>
+  </section>
+
+  <aside class="panel">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="crew" class="on">Tripulação</button>
+      <button role="tab" data-tab="chat">Canal</button>
+      <button role="tab" data-tab="belts">Esteiras</button>
+      <button role="tab" data-tab="sched">Agenda</button>
+      <button role="tab" data-tab="mcp">Conectores</button>
+      <button role="tab" data-tab="log">Registro</button>
+    </nav>
+
+    <!-- TRIPULAÇÃO -->
+    <div class="tab-body on" data-body="crew">
+      <div id="crew-list" class="list"></div>
+      <form id="agent-form" class="card form" autocomplete="off">
+        <h3 id="agent-form-title">Recrutar tripulante</h3>
+        <input type="hidden" name="id">
+        <label>Nome <input name="name" maxlength="40" required placeholder="ex.: Pesquisadora"></label>
+        <label>Função <input name="role" maxlength="200" placeholder="ex.: pesquisa preços e resume"></label>
+        <label>Instruções <textarea name="instructions" rows="3" maxlength="4000" placeholder="Como ele deve trabalhar, formato das respostas…"></textarea></label>
+        <div class="row2">
+          <label>Provedor
+            <select name="provider">
+              <option value="">padrão (.env)</option>
+              <option value="freellmapi">FreeLLMAPI (grátis)</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="openai">Compatível OpenAI</option>
+            </select>
+          </label>
+          <label>Modelo <input name="model" maxlength="120" placeholder="padrão"></label>
+        </div>
+        <div class="row2">
+          <label>Orçamento US$ <input name="budget_usd" type="number" min="0" step="0.5" placeholder="0 = sem limite"></label>
+          <label>Cor <input name="color" type="color" value="#5ec8ff"></label>
+        </div>
+        <label class="check"><input type="checkbox" name="shell"> Terminal (container Docker, pede permissão)</label>
+        <fieldset class="mcp-pick"><legend>Conectores</legend><div id="agent-mcp-list" class="muted">nenhum conector cadastrado</div></fieldset>
+        <div class="actions">
+          <button type="submit" class="btn primary" id="agent-save">Recrutar</button>
+          <button type="button" class="btn ghost" id="agent-cancel" hidden>Cancelar edição</button>
+          <button type="button" class="btn danger" id="agent-delete" hidden>Dispensar</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- CANAL (CHAT) -->
+    <div class="tab-body" data-body="chat">
+      <div class="chat-head">
+        <select id="chat-agent" aria-label="Agente"></select>
+        <button class="btn ghost small" id="chat-reset" title="Apagar o histórico deste agente">Limpar</button>
+        <button class="btn ghost small" id="chat-undo" title="Restaurar a pasta do agente para o último checkpoint">Desfazer</button>
+        <button class="btn danger small" id="chat-cancel" hidden>Parar</button>
+      </div>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form">
+        <button type="button" class="btn icon" id="mic" title="Falar (pt-BR)" aria-label="Falar">🎙</button>
+        <textarea id="chat-input" rows="1" placeholder="Mensagem para o tripulante…" aria-label="Mensagem"></textarea>
+        <button type="submit" class="btn primary">Enviar</button>
+      </form>
+      <label class="check tts"><input type="checkbox" id="tts"> Ler respostas em voz alta</label>
+    </div>
+
+    <!-- ESTEIRAS -->
+    <div class="tab-body" data-body="belts">
+      <p class="muted">Uma esteira leva o resultado de um tripulante ao próximo. <b>Automática</b>: todo resultado final segue sozinho. <b>Manual</b>: o tripulante decide quando passar trabalho.</p>
+      <form id="belt-form" class="card form">
+        <div class="row2">
+          <label>De <select name="from_agent" class="agent-select"></select></label>
+          <label>Para <select name="to_agent" class="agent-select"></select></label>
+        </div>
+        <label>Nota <input name="note" maxlength="200" placeholder="ex.: revisar antes de publicar"></label>
+        <label class="check"><input type="checkbox" name="auto" checked> Automática</label>
+        <div class="actions"><button class="btn primary">Ligar esteira</button></div>
+      </form>
+      <div id="belt-list" class="list"></div>
+    </div>
+
+    <!-- AGENDA -->
+    <div class="tab-body" data-body="sched">
+      <p class="muted">Tarefas que rodam sozinhas no horário do seu computador. Formato cron: <code>minuto hora dia mês dia-semana</code>. Execuções agendadas <b>nunca</b> usam o terminal.</p>
+      <form id="sched-form" class="card form">
+        <label>Tripulante <select name="agent_id" class="agent-select"></select></label>
+        <div class="row2">
+          <label>Quando
+            <select id="cron-preset">
+              <option value="0 9 * * 1-5">Dias úteis às 9h</option>
+              <option value="0 * * * *">A cada hora</option>
+              <option value="0 8 * * *">Todo dia às 8h</option>
+              <option value="0 18 * * 5">Sexta às 18h</option>
+              <option value="">Personalizado…</option>
+            </select>
+          </label>
+          <label>Cron <input name="cron" value="0 9 * * 1-5" required></label>
+        </div>
+        <label>Tarefa <textarea name="prompt" rows="2" required placeholder="ex.: leia as notícias de IA e salve um resumo em resumo.md"></textarea></label>
+        <div class="actions"><button class="btn primary">Agendar</button></div>
+      </form>
+      <div id="sched-list" class="list"></div>
+    </div>
+
+    <!-- CONECTORES MCP -->
+    <div class="tab-body" data-body="mcp">
+      <p class="muted">Conectores MCP dão novas ferramentas aos tripulantes. Cada uso pede permissão; “sempre” libera também nas execuções automáticas.</p>
+      <form id="mcp-form" class="card form" autocomplete="off">
+        <div class="row2">
+          <label>Nome <input name="name" required pattern="[a-z0-9_-]{1,32}" placeholder="ex.: arquivos"></label>
+          <label>Tipo
+            <select name="transport"><option value="stdio">Local (comando)</option><option value="http">Remoto (URL)</option></select>
+          </label>
+        </div>
+        <label class="only-stdio">Comando <input name="command" placeholder="ex.: npx"></label>
+        <label class="only-stdio">Argumentos <input name="args" placeholder="ex.: -y @modelcontextprotocol/server-filesystem C:\notas"></label>
+        <label class="only-http" hidden>URL <input name="url" placeholder="https://…/mcp"></label>
+        <label class="only-http" hidden>Token (opcional) <input name="token" type="password" placeholder="Bearer …"></label>
+        <div class="actions"><button class="btn primary">Conectar</button></div>
+      </form>
+      <div id="mcp-list" class="list"></div>
+      <h4>Permissões “sempre”</h4>
+      <div id="grant-list" class="list"></div>
+    </div>
+
+    <!-- REGISTRO -->
+    <div class="tab-body" data-body="log">
+      <div id="totals" class="card totals"></div>
+      <div id="run-list" class="list"></div>
+    </div>
+  </aside>
+</main>
+
+<dialog id="consent" class="consent">
+  <form method="dialog">
+    <h3>⚠ Pedido de permissão</h3>
+    <p id="consent-who"></p>
+    <pre id="consent-args"></pre>
+    <p class="muted" id="consent-note"></p>
+    <div class="actions" id="consent-actions"></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="voice.js"></script>
+<script src="station.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

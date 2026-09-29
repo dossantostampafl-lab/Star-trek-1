@@ -1,0 +1,22 @@
+name: testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --version
+      - run: npm test
+      - name: Verificar scripts de deploy
+        run: bash -n deploy/oracle/setup.sh && bash -n deploy/oracle/update.sh
