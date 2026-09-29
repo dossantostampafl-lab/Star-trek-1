@@ -125,13 +125,11 @@ $DOMAIN {
 }
 CADDY
   if [ "$FLLM_PANEL" = 1 ]; then
-    HASH="$(docker exec "$CADDY_CT" caddy hash-password --plaintext "$(get_env "$ENV_FILE" ACCESS_PASSWORD)")"
+    # Sem basic_auth: o painel do FreeLLMAPI usa o próprio cabeçalho Authorization (conta + código de configuração),
+    # e uma senha do Caddy na frente conflita com ele. Feche o painel depois de configurar (rode sem --painel-fllm).
     cat <<CADDY
 
 fllm.$BASE {
-	basic_auth {
-		admin $HASH
-	}
 	reverse_proxy star-trek-freellmapi:3001
 	header -Server
 }
@@ -161,7 +159,7 @@ printf '  Endereço:  https://%s   (o certificado sai em até 1 minuto)\n' "$DOM
 if [ -n "$NEW_PASSWORD" ]; then printf '  Senha:     \033[1m%s\033[0m   (guarde; fica em %s)\n' "$NEW_PASSWORD" "$ENV_FILE"
 else printf '  Senha:     a que já estava em %s (ACCESS_PASSWORD)\n' "$ENV_FILE"; fi
 if [ "$FLLM_PANEL" = 1 ]; then
-  printf '  Painel do FreeLLMAPI:  https://fllm.%s   (usuário admin, mesma senha)\n' "$BASE"
+  printf '  Painel do FreeLLMAPI:  https://fllm.%s   (protegido pela conta do próprio FreeLLMAPI)\n' "$BASE"
 fi
 cat <<NEXT
 
@@ -174,6 +172,6 @@ cat <<NEXT
   4. Feche o painel quando terminar: rode este script de novo sem --painel-fllm
 
   Logs:       sudo docker logs -f star-trek-1
-  Atualizar:  cd $APP_DIR && git pull && sudo bash deploy/oracle/setup-docker.sh
+  Atualizar:  cd $APP_DIR && sudo git pull && sudo bash deploy/oracle/setup-docker.sh
   Se o outro projeto sobrescrever o Caddyfile dele, é só rodar este script de novo.
 NEXT
