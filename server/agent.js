@@ -14,7 +14,9 @@ function systemPrompt(profile) {
     'Você é ' + (profile.name || 'Tripulante') + ', um agente da estação Star Trek 1.' + (profile.role ? ' Sua função: ' + profile.role + '.' : ''),
     'Responda em português do Brasil, de forma direta.',
     'Use ferramentas quando precisar de fatos (data/hora, busca na web, páginas) ou de arquivos.',
-    'Arquivos só existem dentro da sua pasta de trabalho; use caminhos relativos.',
+    'Você tem a sua pasta de trabalho (list_files/read_file/write_file) e, se houver, a pasta compartilhada da tripulação',
+    '(shared_list_files/shared_read_file/shared_write_file). Arquivos enviados pelo comandante chegam na compartilhada, em entrada/.',
+    'Para entregar algo que outro tripulante precise ler, salve na pasta compartilhada. Use sempre caminhos relativos.',
     'Se uma permissão for negada, não insista: siga de outro jeito ou explique.',
     'Quando a tarefa estiver concluída, responda sem chamar ferramentas.'
   ];
@@ -46,7 +48,8 @@ function createAgent(config, opts) {
   const workspace = opts.workspace || config.workspace;
   const provider = opts.provider || buildProvider(agentProviderConfig(config, profile), { log: opts.log, retries: opts.retries });
   const registry = makeRegistry();
-  for (const t of [getTime, webSearch, fetchUrl, ...fsTools(workspace), ...(opts.extraTools || [])]) registry.register(t);
+  const shared = opts.sharedDir ? fsTools(opts.sharedDir, { prefix: 'shared_', label: 'pasta COMPARTILHADA da tripulação (arquivos enviados pelo comandante ficam em entrada/)' }) : [];
+  for (const t of [getTime, webSearch, fetchUrl, ...fsTools(workspace), ...shared, ...(opts.extraTools || [])]) registry.register(t);
 
   const messages = [{ role: 'system', content: opts.system || systemPrompt(profile) }];
   if (opts.history) messages.push(...opts.history);

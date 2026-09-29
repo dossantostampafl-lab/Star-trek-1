@@ -159,3 +159,15 @@ h4 { margin: 8px 0 0; font-size: 12px; letter-spacing: .1em; text-transform: upp
 .preset .grow { flex: 1; }
 .preset p { margin-top: 2px; }
 .badge-cap { color: var(--amber); margin-right: 4px; }
+
+.drop { text-align: center; padding: 18px 12px; border-style: dashed; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.drop.over { border-color: var(--amber); background: rgba(255,179,71,.06); }
+.cat { flex-direction: column; align-items: stretch; gap: 6px; }
+.cat .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cat .head .title { flex: 1; min-width: 140px; }
+.cat input { background: var(--hull); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--ink); width: 100%; }
+.cat .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-dim); }
+.tag.safe { color: var(--green); border-color: rgba(125,255,168,.35); }
+.tag.ask { color: var(--amber); border-color: rgba(255,179,71,.35); }
+a.link { color: var(--cyan); font-size: 12px; }

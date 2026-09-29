@@ -17,6 +17,9 @@ services:
       PORT: "8787"
       DATA_DIR: /var/lib/startrek/data
       WORKSPACE: /var/lib/startrek/workspace
+      # conectores MCP via npx: cache persistente (não baixa de novo a cada reinício)
+      npm_config_cache: /var/lib/startrek/npm-cache
+      npm_config_update_notifier: "false"
     volumes:
       # mesmo caminho dentro e fora: o terminal dos agentes cria containers irmãos que montam essas pastas
       - /var/lib/startrek:/var/lib/startrek

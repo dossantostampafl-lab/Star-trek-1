@@ -31,6 +31,7 @@
       <button role="tab" data-tab="chat">Canal</button>
       <button role="tab" data-tab="belts">Esteiras</button>
       <button role="tab" data-tab="sched">Agenda</button>
+      <button role="tab" data-tab="files">Arquivos</button>
       <button role="tab" data-tab="mcp">Conectores</button>
       <button role="tab" data-tab="log">Registro</button>
     </nav>
@@ -86,6 +87,7 @@
       </div>
       <div id="chat-log" class="chat-log" aria-live="polite"></div>
       <form id="chat-form" class="chat-form">
+        <button type="button" class="btn icon" id="attach" title="Enviar arquivo para a tripulação" aria-label="Enviar arquivo">📎</button>
         <button type="button" class="btn icon" id="mic" title="Falar (pt-BR)" aria-label="Falar">🎙</button>
         <textarea id="chat-input" rows="1" placeholder="Mensagem para o tripulante…" aria-label="Mensagem"></textarea>
         <button type="submit" class="btn primary">Enviar</button>
@@ -132,7 +134,24 @@
     </div>
 
     <!-- CONECTORES MCP -->
+    <div class="tab-body" data-body="files">
+      <p class="muted">Arquivos enviados vão para a <b>pasta compartilhada</b> (em <code>entrada/</code>), que todos os tripulantes leem. PDF, Word, PowerPoint, Excel e texto viram texto para eles. Até 25 MB por arquivo.</p>
+      <div class="card drop" id="drop">
+        <b>Arraste arquivos aqui</b> ou <button type="button" class="btn primary" id="pick">Escolher arquivos</button>
+        <div class="muted" id="upload-status"></div>
+      </div>
+      <div class="chat-head">
+        <select id="files-scope" aria-label="Pasta"></select>
+        <button class="btn ghost small" id="files-refresh">Atualizar</button>
+      </div>
+      <div id="files-list" class="list"></div>
+    </div>
+
     <div class="tab-body" data-body="mcp">
+      <h4>Catálogo</h4>
+      <p class="muted">Toque em <b>Instalar</b>: o conector já é ligado nos tripulantes certos. Os marcados como <b>leitura</b> ficam liberados sem perguntar; os outros pedem permissão a cada uso.</p>
+      <div id="mcp-catalog" class="list"></div>
+      <h4>Conector personalizado</h4>
       <p class="muted">Conectores MCP dão novas ferramentas aos tripulantes. Cada uso pede permissão; “sempre” libera também nas execuções automáticas.</p>
       <form id="mcp-form" class="card form" autocomplete="off">
         <div class="row2">
@@ -172,6 +191,7 @@
 
 <div id="toast" class="toast" role="status" hidden></div>
 
+<input type="file" id="file-input" multiple hidden>
 <script src="voice.js"></script>
 <script src="station.js"></script>
 <script src="app.js"></script>

@@ -30,6 +30,13 @@ function makeStation(deps) {
   const active = new Map();     // agentId → {runId, controller}
   let running = 0;
 
+  // Pasta compartilhada da tripulação: uploads do comandante (entrada/) e entregas entre tripulantes.
+  const sharedDir = () => {
+    const dir = path.join(config.workspace, '_compartilhado');
+    fs.mkdirSync(path.join(dir, 'entrada'), { recursive: true });
+    return dir;
+  };
+
   const workspaceOf = (id) => {
     const dir = path.join(config.workspace, id);
     fs.mkdirSync(dir, { recursive: true });
@@ -101,7 +108,7 @@ function makeStation(deps) {
     if (deps.mcp) for (const t of deps.mcp.toolsFor(a.mcp || [])) extraTools.push(t);
     const rt = createAgent(config, {
       profile: { id: a.id, name: a.name, role: a.role, instructions: a.instructions, provider: a.provider, model: a.model },
-      workspace, consent: deps.consent, checkpoints: deps.checkpoints, extraTools,
+      workspace, sharedDir: sharedDir(), consent: deps.consent, checkpoints: deps.checkpoints, extraTools,
       history: db.getHistory(a.id), log, retries: deps.retries,
       provider: deps.providerFor ? deps.providerFor(a) : undefined
     });
@@ -218,7 +225,7 @@ function makeStation(deps) {
     return out;
   }
 
-  return { enqueue, cancel, reset, invalidate, status, workspaceOf, runtime };
+  return { enqueue, cancel, reset, invalidate, status, workspaceOf, sharedDir, runtime };
 }
 
 module.exports = { makeStation, trimHistory, MAX_CHAIN };

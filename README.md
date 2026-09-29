@@ -58,6 +58,28 @@ use o botão **Embarcar** (aba Tripulação) — ele só cria o que falta.
 
 Fale só com o Capitão: o pedido percorre a esteira sozinho e o resumo final volta para ele.
 
+## Arquivos
+
+Aba **Arquivos** (ou o 📎 no Canal): envie arquivos de até 25 MB. Eles vão para a **pasta compartilhada**
+(`entrada/`), que todos os tripulantes leem com `shared_read_file`. PDF, DOCX, PPTX, XLSX e ODT são convertidos
+em texto automaticamente. Na mesma aba você baixa o que os tripulantes produziram (pasta compartilhada ou de cada um).
+
+## Conectores MCP (catálogo)
+
+Aba **Conectores → Catálogo**: instale com um toque. Cada conector já é ligado nos tripulantes certos; os de
+**leitura** ficam liberados sem perguntar, os outros pedem permissão a cada uso.
+
+| Conector | Chave | Vai para |
+| --- | --- | --- |
+| Memória da tripulação | não | todos |
+| Raciocínio em etapas | não | Capitão, Engenheira |
+| Documentação de bibliotecas (Context7) | opcional | Engenheira, Pesquisadora |
+| DeepWiki (repositórios GitHub) | não | Engenheira, Pesquisadora |
+| Busca Tavily · Busca Brave · Firecrawl | sim (planos grátis) | Pesquisadora |
+| GitHub · Notion · Supabase (só leitura) | token | Engenheira / Redator |
+
+As chaves ficam no banco da estação (`data/`) e nunca são enviadas para a página.
+
 ## Usando a estação
 
 | Aba | Para quê |

@@ -65,7 +65,7 @@
   function renderAll() {
     Station.setData(S.agents, S.conveyors, S.status);
     Station.setSelected(selected);
-    renderTop(); renderCrew(); renderAgentSelects(); renderChatHead(); renderBelts(); renderSchedules(); renderMcp(); renderLog();
+    renderTop(); renderCrew(); renderAgentSelects(); renderChatHead(); renderBelts(); renderSchedules(); renderMcp(); renderLog(); renderFilesScope();
   }
 
   function renderTop() {
@@ -178,6 +178,8 @@
     $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
     $$('.tab-body').forEach(b => b.classList.toggle('on', b.dataset.body === name));
     if (name === 'log') loadRuns();
+    if (name === 'files') loadFiles();
+    if (name === 'mcp') loadCatalog();
   }
   $$('.tabs button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
@@ -357,6 +359,106 @@
     }
   }
 
+  // ---------- arquivos ----------
+  const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+  function renderFilesScope() {
+    const sel = $('#files-scope');
+    const v = sel.value || 'shared';
+    sel.replaceChildren(h('option', { value: 'shared', text: 'Pasta compartilhada (tripulação)' }), ...S.agents.map(a => h('option', { value: a.id, text: 'Pasta de ' + a.name })));
+    sel.value = [...sel.options].some(o => o.value === v) ? v : 'shared';
+  }
+  const loadFiles = safe(async () => {
+    renderFilesScope();
+    const scope = $('#files-scope').value;
+    const files = await api('GET', '/api/files?scope=' + encodeURIComponent(scope));
+    const box = $('#files-list');
+    box.replaceChildren();
+    if (!files.length) box.append(h('div', { class: 'empty', text: 'Nenhum arquivo nesta pasta.' }));
+    for (const f of files.sort((a, b) => b.mtime.localeCompare(a.mtime))) {
+      box.append(h('div', { class: 'item' },
+        h('div', { class: 'grow' }, h('div', { class: 'title', text: f.path }), h('div', { class: 'sub', text: fmtSize(f.size) + ' · ' + when(f.mtime) })),
+        h('button', { class: 'btn small', text: 'Baixar', onclick: safe(() => download(scope, f.path)) }),
+        h('button', { class: 'btn small danger', text: '✕', title: 'Apagar', onclick: safe(async () => { if (confirm('Apagar ' + f.path + '?')) { await api('DELETE', '/api/files?scope=' + encodeURIComponent(scope) + '&path=' + encodeURIComponent(f.path)); loadFiles(); } }) })));
+    }
+  });
+  $('#files-scope').addEventListener('change', loadFiles);
+  $('#files-refresh').addEventListener('click', loadFiles);
+
+  async function download(scope, p) {
+    const res = await fetch('/api/files/download?scope=' + encodeURIComponent(scope) + '&path=' + encodeURIComponent(p), { headers: { 'x-st1-token': TOKEN } });
+    if (!res.ok) throw new Error('não consegui baixar (' + res.status + ')');
+    const url = URL.createObjectURL(await res.blob());
+    const a = h('a', { href: url, download: p.split('/').pop() });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  // envia para a pasta compartilhada; devolve os caminhos salvos
+  async function uploadFiles(list) {
+    const done = [];
+    const status = $('#upload-status');
+    for (const f of list) {
+      if (f.size > 25 * 1024 * 1024) { toast(f.name + ': maior que 25 MB', true); continue; }
+      status.textContent = 'Enviando ' + f.name + '…';
+      const res = await fetch('/api/files/upload?scope=shared&name=' + encodeURIComponent(f.name), { method: 'POST', headers: { 'x-st1-token': TOKEN, 'content-type': 'application/octet-stream' }, body: f });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { toast(f.name + ': ' + (j.error || res.status), true); continue; }
+      done.push(j.path);
+    }
+    status.textContent = done.length ? 'Enviado: ' + done.join(', ') : '';
+    if (done.length) toast(done.length + ' arquivo(s) na pasta compartilhada.');
+    return done;
+  }
+  let attachToChat = false;
+  const fileInput = $('#file-input');
+  $('#pick').addEventListener('click', () => { attachToChat = false; fileInput.click(); });
+  $('#attach').addEventListener('click', () => { attachToChat = true; fileInput.click(); });
+  fileInput.addEventListener('change', safe(async () => {
+    const paths = await uploadFiles([...fileInput.files]);
+    fileInput.value = '';
+    if (attachToChat && paths.length) {
+      const inp = $('#chat-input');
+      inp.value = (inp.value ? inp.value + '\n' : '') + 'Anexei na pasta compartilhada: ' + paths.join(', ') + '. Leia com shared_read_file.';
+      inp.dispatchEvent(new Event('input')); inp.focus();
+    }
+    loadFiles();
+  }));
+  const drop = $('#drop');
+  ['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', safe(async (e) => { await uploadFiles([...e.dataTransfer.files]); loadFiles(); }));
+
+  // ---------- catálogo de conectores ----------
+  const loadCatalog = safe(async () => {
+    const cat = await api('GET', '/api/mcp/catalog');
+    const box = $('#mcp-catalog');
+    box.replaceChildren();
+    for (const c of cat) {
+      const inputs = c.fields.map(f => h('input', { type: f.secret ? 'password' : 'text', placeholder: f.label + (f.optional ? '' : ' *'), 'data-key': f.key, autocomplete: 'off' }));
+      const links = c.fields.filter(f => f.link).map(f => h('a', { class: 'link', href: f.link, target: '_blank', rel: 'noopener noreferrer', text: 'pegar a chave ↗' }));
+      const btn = h('button', { class: 'btn ' + (c.installed ? 'small' : 'primary small'), text: c.installed ? (c.fields.length ? 'Trocar chave' : 'Reinstalar') : 'Instalar' });
+      btn.addEventListener('click', safe(async () => {
+        const values = {};
+        for (const i of inputs) values[i.dataset.key] = i.value;
+        btn.disabled = true; btn.textContent = 'Conectando…';
+        try {
+          const r = await api('POST', '/api/mcp/install', { id: c.id, values });
+          const ok = r.status && r.status.status === 'conectado';
+          toast(c.title + ': ' + (ok ? r.status.tools.length + ' ferramenta(s), ligado em ' + (r.assigned.join(', ') || 'ninguém ainda') : (r.status && r.status.error) || 'falhou'), !ok);
+        } finally { btn.disabled = false; }
+        await refresh(); loadCatalog();
+      }));
+      box.append(h('div', { class: 'item cat' },
+        h('div', { class: 'head' }, h('div', { class: 'title', text: c.title }),
+          h('span', { class: 'tag ' + (c.safe ? 'safe' : 'ask'), text: c.safe ? 'leitura' : 'pede permissão' }),
+          h('span', { class: 'tag', text: c.badge }), c.installed ? h('span', { class: 'state done', text: 'instalado' }) : null),
+        h('div', { class: 'sub', text: c.description }),
+        h('div', { class: 'sub', text: 'Vai para: ' + c.crew.join(', ') }),
+        ...inputs,
+        h('div', { class: 'row' }, btn, ...links)));
+    }
+  });
+
   // ---------- registro ----------
   function renderLog() {
     const t = S.totals || {};
@@ -414,6 +516,7 @@
   function onEvent(ev) {
     switch (ev.type) {
       case 'state_changed': case 'mcp_changed': case 'run_queued': refreshSoon(); break;
+      case 'files_changed': if ($('.tab-body[data-body=files]').classList.contains('on')) loadFiles(); break;
       case 'history_reset': if (ev.agentId === selected) loadHistory(); break;
       case 'run_start':
         Station.setActivity(ev.agentId, ev.source === 'chat' ? 'pensando…' : ev.source === 'schedule' ? 'tarefa agendada' : 'recebeu da esteira', 8000);

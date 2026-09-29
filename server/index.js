@@ -16,6 +16,8 @@ const { makeMcpManager } = require('./mcp.js');
 const { dockerAvailable } = require('./tools/shell.js');
 const { makeAuth } = require('./auth.js');
 const crew = require('./crew.js');
+const { makeJail } = require('./tools/fs.js');
+const mcpCatalog = require('./mcp-catalog.js');
 
 const WEB = path.join(ROOT, 'web');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -99,6 +101,37 @@ async function start(overrides) {
   }
   const httpErr = (status, msg) => Object.assign(new Error(msg), { status });
 
+  const MAX_UPLOAD = 25 * 1024 * 1024;
+  async function readRaw(req) {
+    let size = 0;
+    const chunks = [];
+    for await (const c of req) { size += c.length; if (size > MAX_UPLOAD) throw httpErr(413, 'arquivo maior que 25 MB'); chunks.push(c); }
+    return Buffer.concat(chunks);
+  }
+  const cleanName = (n) => String(n || '').normalize('NFC').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/^\.+/, '').trim().slice(0, 120) || 'arquivo';
+  // scope = 'shared' (pasta da tripulação) ou o id de um tripulante
+  function scopeJail(scope) {
+    if (!scope || scope === 'shared') return makeJail(station.sharedDir());
+    agentOr404(scope);
+    return makeJail(station.workspaceOf(scope));
+  }
+  function listTree(jail) {
+    const out = [];
+    const walk = (dir, depth) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        if (out.length >= 500 || e.isSymbolicLink()) continue;
+        const abs = path.join(dir, e.name);
+        if (e.isDirectory()) { if (depth < 6) walk(abs, depth + 1); continue; }
+        if (!e.isFile() || /\.tmp-\d+$/.test(e.name)) continue;
+        const st = fs.statSync(abs);
+        out.push({ path: jail.relOf(abs), size: st.size, mtime: st.mtime.toISOString() });
+      }
+    };
+    walk(jail.root, 0);
+    return out;
+  }
+  const DL_MIME = { '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.json': 'application/json', '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.html': 'text/plain; charset=utf-8' };
+
   async function readBody(req) {
     let size = 0;
     const chunks = [];
@@ -129,7 +162,7 @@ async function start(overrides) {
       schedules: db.listSchedules().map(s => Object.assign(s, { info: describe(s.cron) })),
       status: station.status(),
       totals: db.totals(),
-      mcp: { configured: db.listMcp(), live: mcp.status() },
+      mcp: { configured: db.listMcp().map(x => ({ id: x.id, name: x.name, transport: x.transport, command: x.command, url: x.url, enabled: x.enabled })), live: mcp.status() },
       grants: db.listGrants(),
       shellAvailable,
       authEnabled: auth.enabled,
@@ -310,6 +343,30 @@ async function start(overrides) {
 
     // ---- conectores MCP
     if (seg[0] === 'mcp') {
+      if (seg[1] === 'catalog' && m === 'GET') return sendJson(res, 200, mcpCatalog.publicCatalog(db.listMcp().map(x => x.name)));
+      if (seg[1] === 'install' && m === 'POST') {
+        const b = await readBody(req);
+        let built;
+        try { built = mcpCatalog.buildServer(String(b.id || ''), b.values, { dataDir: config.dataDir }); }
+        catch (e) { throw httpErr(400, e.message); }
+        const old = db.listMcp().find(x => x.name === built.row.name);
+        if (old) { await mcp.disconnect(old.name); db.deleteMcp(old.id); }   // reinstalar = trocar a chave
+        const row = db.createMcp(built.row);
+        // liga nos tripulantes indicados (ou nos padrões do catálogo que existirem)
+        const names = Array.isArray(b.crew) ? b.crew.map(String) : built.entry.crew;
+        const assigned = [];
+        for (const a of db.listAgents()) {
+          if (!names.some(n => n === a.id || n.toLowerCase() === a.name.toLowerCase())) continue;
+          if (!(a.mcp || []).includes(row.name)) db.updateAgent(a.id, { mcp: (a.mcp || []).concat(row.name) });
+          // conectores só-leitura: liberar sem perguntar, se o comandante marcou
+          if (b.autoGrant !== false && built.entry.safe) db.grants.add(a.id, 'mcp:' + row.name);
+          assigned.push(a.name);
+        }
+        const st = await mcp.connect(row);
+        station.invalidate();
+        bus.emit({ type: 'state_changed' });
+        return sendJson(res, 201, { server: { id: row.id, name: row.name }, status: st, assigned });
+      }
       if (seg.length === 1 && m === 'POST') {
         const b = await readBody(req);
         let row;
@@ -327,6 +384,43 @@ async function start(overrides) {
       if (!row) throw httpErr(404, 'conector não encontrado');
       if (seg.length === 2 && m === 'DELETE') { await mcp.disconnect(row.name); db.deleteMcp(row.id); station.invalidate(); bus.emit({ type: 'mcp_changed' }); return sendJson(res, 200, { ok: true }); }
       if (seg[2] === 'reconnect' && m === 'POST') return sendJson(res, 200, await mcp.connect(row));
+    }
+
+    // ---- arquivos: enviar, listar, baixar, apagar
+    if (seg[0] === 'files') {
+      const jail0 = scopeJail(url.searchParams.get('scope'));
+      const jail = Object.assign({}, jail0, { resolve: (p) => { try { return jail0.resolve(p); } catch (e) { throw httpErr(400, e.message); } } });
+      if (seg.length === 1 && m === 'GET') return sendJson(res, 200, listTree(jail));
+      if (seg[1] === 'upload' && m === 'POST') {
+        const name = cleanName(url.searchParams.get('name'));
+        const buf = await readRaw(req);
+        if (!buf.length) throw httpErr(400, 'arquivo vazio');
+        let rel = 'entrada/' + name;
+        const ext = path.extname(name), base = name.slice(0, name.length - ext.length);
+        for (let i = 2; fs.existsSync(jail.resolve(rel)) && i < 1000; i++) rel = 'entrada/' + base + ' (' + i + ')' + ext;
+        const abs = jail.resolve(rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, buf);
+        bus.emit({ type: 'files_changed', scope: url.searchParams.get('scope') || 'shared' });
+        return sendJson(res, 201, { path: rel, size: buf.length });
+      }
+      if (seg[1] === 'download' && m === 'GET') {
+        const abs = jail.resolve(url.searchParams.get('path'));
+        if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw httpErr(404, 'arquivo não encontrado');
+        res.writeHead(200, {
+          'content-type': DL_MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
+          'content-disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(path.basename(abs)),
+          'cache-control': 'no-store', 'x-content-type-options': 'nosniff'
+        });
+        return fs.createReadStream(abs).pipe(res);
+      }
+      if (seg.length === 1 && m === 'DELETE') {
+        const abs = jail.resolve(url.searchParams.get('path'));
+        if (abs === jail.root || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw httpErr(404, 'arquivo não encontrado');
+        fs.unlinkSync(abs);
+        bus.emit({ type: 'files_changed' });
+        return sendJson(res, 200, { ok: true });
+      }
     }
 
     // ---- permissões
