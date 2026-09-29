@@ -15,7 +15,18 @@ Só as portas 22 (SSH), 80 e 443 ficam abertas. A estação e o FreeLLMAPI escut
 Instale o Star Trek **na mesma VM** em vez de criar outra — o limite grátis do Ampere é da conta inteira
 (2 OCPUs / 12 GB), não por VM. Pule os passos 1 a 3 e vá direto ao passo 4 conectando na VM que já existe.
 
-O instalador convive com o outro projeto:
+**O outro projeto roda em Docker com Caddy em container** (como o The Creation)? Use o instalador em container:
+
+```bash
+cd /opt/star-trek-1 && sudo bash deploy/oracle/setup-docker.sh --painel-fllm
+```
+
+Ele sobe o Star Trek e o FreeLLMAPI como containers **na rede do Caddy existente**, sem publicar portas,
+e acrescenta ao Caddyfile dele só um bloco marcado (com backup, validação e recarga sem derrubar o outro
+projeto; se algo falhar, a configuração anterior volta). Se o outro projeto sobrescrever o Caddyfile num
+deploy, rode o script de novo.
+
+**O outro projeto roda direto na VM (sem Caddy em container)?** Use `deploy/oracle/setup.sh`, que convive assim:
 
 - **Não mexe** na configuração dele. Se o Caddy já tem sites, eles são mantidos (com backup) e o Star Trek
   entra num arquivo próprio (`/etc/caddy/star-trek-1.caddy`) com uma linha `import`.

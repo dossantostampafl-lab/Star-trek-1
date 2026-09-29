@@ -53,6 +53,8 @@ function getConfig(env) {
     dataDir: path.resolve(ROOT, env.DATA_DIR || './data'),
     maxSteps: Math.max(1, Number(env.MAX_STEPS) || 12),
     port: Number(env.PORT) || 8787,
+    // Endereço de escuta. Padrão só local; em container use 0.0.0.0 (a porta não é publicada, só o proxy alcança).
+    host: env.HOST || '127.0.0.1',
     shellImage: env.SHELL_IMAGE || 'alpine:3.20',
     shellNetwork: env.SHELL_NETWORK === 'bridge' ? 'bridge' : 'none',
     maxConcurrent: Math.max(1, Number(env.MAX_CONCURRENT) || 3),

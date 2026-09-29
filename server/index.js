@@ -370,7 +370,7 @@ async function start(overrides) {
   // conecta os MCP salvos
   for (const row of db.listMcp()) if (row.enabled) mcp.connect(row);
 
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(overrides.port != null ? overrides.port : config.port, '127.0.0.1', resolve); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(overrides.port != null ? overrides.port : config.port, overrides.host || config.host, resolve); });
   scheduler.start();
   const url = 'http://127.0.0.1:' + server.address().port;
   return {

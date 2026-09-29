@@ -4,3 +4,4 @@ workspace/
 data/
 *.log
 .DS_Store
+deploy/docker/.env
