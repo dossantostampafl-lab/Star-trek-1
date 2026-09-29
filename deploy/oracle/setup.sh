@@ -5,7 +5,7 @@
 #   sudo bash deploy/oracle/setup.sh                  # tudo: Node, Docker, Caddy (HTTPS), FreeLLMAPI, serviço
 #   sudo bash deploy/oracle/setup.sh --sem-freellmapi # se o FreeLLMAPI já roda em outro lugar
 #   sudo DOMAIN=estacao.meudominio.com bash deploy/oracle/setup.sh   # usar seu domínio em vez do sslip.io
-#   sudo bash deploy/oracle/setup.sh --painel-fllm    # abre o painel do FreeLLMAPI em https://fllm.SEU-DOMINIO
+#   sudo bash deploy/oracle/setup.sh --painel-fllm    # abre o painel do FreeLLMAPI em https://fllm.SEU-IP.sslip.io
 #                                                     # (com senha) — útil para configurar pelo tablet/celular.
 #                                                     # Rode de novo sem a opção para fechar o painel.
 #
@@ -34,6 +34,25 @@ grep -qi ubuntu /etc/os-release || warn "Testado em Ubuntu 22.04/24.04; outra di
 [ -f "$APP_DIR/server/index.js" ] || die "Não achei o projeto em $APP_DIR"
 LOGIN_USER="${SUDO_USER:-ubuntu}"
 export DEBIAN_FRONTEND=noninteractive
+
+# ---------------------------------------------------------------- convivência com outros projetos
+# A VM pode já rodar outro sistema (ex.: The Creation). Nada dele é alterado: checamos as portas antes.
+say "Checando portas em uso"
+port_owner() { ss -ltnpH "sport = :$1" 2>/dev/null | sed -n 's/.*users:((\"\([^\"]*\)\".*/\1/p' | head -1; }
+for p in 80 443; do
+  o="$(port_owner "$p")"
+  if [ -n "$o" ] && [ "$o" != "caddy" ]; then
+    die "A porta $p já está em uso por '$o'. O HTTPS do Star Trek usa o Caddy nas portas 80/443.
+   Se outro projeto usa $o, me avise: dá para colocar o Star Trek atrás do mesmo servidor."
+  fi
+done
+o="$(port_owner "$PORT")"
+if [ -n "$o" ] && [ "$o" != "node" ]; then die "A porta $PORT já está em uso por '$o'. Mude PORT no .env e rode de novo."; fi
+if [ -n "$(port_owner 3001)" ] && [ ! -d "$(getent passwd "${SUDO_USER:-ubuntu}" | cut -d: -f6)/freellmapi" ]; then
+  warn "A porta 3001 já está em uso por outro programa — o FreeLLMAPI não será instalado aqui."
+  WITH_FLLM=0
+fi
+ok "portas livres (ou já do Star Trek/Caddy)"
 
 # ---------------------------------------------------------------- pacotes
 say "Pacotes do sistema"
@@ -102,7 +121,7 @@ if [ -n "${DOMAIN:-}" ]; then
 else
   IP="$(curl -fsS -4 --max-time 10 https://ifconfig.me || curl -fsS -4 --max-time 10 https://api.ipify.org || true)"
   [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Não descobri o IP público. Rode de novo com DOMAIN=seu.dominio"
-  DOMAIN="${IP//./-}.sslip.io"
+  DOMAIN="startrek.${IP//./-}.sslip.io"
   ok "IP público $IP → $DOMAIN (sslip.io: domínio grátis que aponta para o seu IP)"
 fi
 
@@ -193,8 +212,10 @@ curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && ok "estação n
 
 # ---------------------------------------------------------------- Caddy
 say "HTTPS (Caddy)"
-cat > /etc/caddy/Caddyfile <<CADDY
-# Gerado por deploy/oracle/setup.sh
+SITE_FILE="/etc/caddy/star-trek-1.caddy"
+MAIN="/etc/caddy/Caddyfile"
+cat > "$SITE_FILE" <<CADDY
+# Gerado por deploy/oracle/setup.sh — Star Trek 1
 $DOMAIN {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:$PORT {
@@ -211,9 +232,9 @@ CADDY
 if [ "$FLLM_PANEL" = 1 ]; then
   # Painel do FreeLLMAPI pela internet, protegido por usuário/senha do Caddy (além do login do próprio FreeLLMAPI).
   PANEL_HASH="$(caddy hash-password --plaintext "$(get_env ACCESS_PASSWORD)")"
-  cat >> /etc/caddy/Caddyfile <<CADDY
+  cat >> "$SITE_FILE" <<CADDY
 
-fllm.$DOMAIN {
+fllm.${DOMAIN#startrek.} {
 	basic_auth {
 		admin $PANEL_HASH
 	}
@@ -222,7 +243,25 @@ fllm.$DOMAIN {
 }
 CADDY
 fi
-caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || die "Caddyfile inválido"
+# O Caddyfile principal só ganha uma linha "import". Se ele é do pacote (página padrão) ou nosso, é substituído;
+# se tem configuração de outro projeto, é mantido — com backup — e só recebe o import.
+BACKUP=""
+if [ ! -f "$MAIN" ] || grep -q 'Gerado por deploy/oracle/setup.sh' "$MAIN" || ! grep -vE '^\s*(#|$)' "$MAIN" | grep -qvE '^\s*(:80|root \*|file_server|\{|\})'; then
+  printf '# Gerado por deploy/oracle/setup.sh\nimport %s\n' "$SITE_FILE" > "$MAIN"
+  ok "Caddyfile principal criado"
+elif grep -qF "import $SITE_FILE" "$MAIN"; then
+  ok "Caddyfile principal já importa o Star Trek (configuração de outros projetos preservada)"
+else
+  BACKUP="$MAIN.bak-$(date +%Y%m%d-%H%M%S)"
+  cp "$MAIN" "$BACKUP"
+  printf '\n# Star Trek 1\nimport %s\n' "$SITE_FILE" >> "$MAIN"
+  ok "Caddyfile de outro projeto preservado (backup em $BACKUP); só adicionei o import"
+fi
+if ! caddy validate --config "$MAIN" --adapter caddyfile >/dev/null 2>&1; then
+  [ -n "$BACKUP" ] && cp "$BACKUP" "$MAIN" && warn "configuração anterior do Caddy restaurada"
+  caddy validate --config "$MAIN" --adapter caddyfile 2>&1 | tail -5
+  die "Caddyfile inválido — nada foi alterado no servidor web"
+fi
 systemctl enable caddy >/dev/null 2>&1
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
 ok "Caddy servindo https://$DOMAIN (o certificado sai em até 1 minuto, se as portas estiverem abertas na Oracle)"
@@ -237,7 +276,7 @@ cat <<NEXT
   Próximos passos:
 NEXT
 if [ "$FLLM_PANEL" = 1 ]; then cat <<NEXT
-  1. Abra o painel do FreeLLMAPI:  https://fllm.$DOMAIN
+  1. Abra o painel do FreeLLMAPI:  https://fllm.${DOMAIN#startrek.}
      usuário: admin   senha: a mesma senha de acesso da estação
      Crie a conta, adicione as chaves grátis dos provedores e copie a chave unificada (freellmapi-...)
      do topo da página Keys. Depois de configurar, feche o painel rodando o setup de novo sem --painel-fllm.

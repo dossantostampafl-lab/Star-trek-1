@@ -10,6 +10,23 @@ Internet ──https──▶ Caddy (443) ──▶ Star Trek 1 (127.0.0.1:8787)
 
 Só as portas 22 (SSH), 80 e 443 ficam abertas. A estação e o FreeLLMAPI escutam apenas dentro da VM.
 
+## Já tem uma VM com outro projeto?
+
+Instale o Star Trek **na mesma VM** em vez de criar outra — o limite grátis do Ampere é da conta inteira
+(2 OCPUs / 12 GB), não por VM. Pule os passos 1 a 3 e vá direto ao passo 4 conectando na VM que já existe.
+
+O instalador convive com o outro projeto:
+
+- **Não mexe** na configuração dele. Se o Caddy já tem sites, eles são mantidos (com backup) e o Star Trek
+  entra num arquivo próprio (`/etc/caddy/star-trek-1.caddy`) com uma linha `import`.
+- Usa o endereço `https://startrek.SEU-IP.sslip.io`, separado de qualquer outro site no mesmo IP.
+- **Para antes de instalar** se as portas 80/443 estiverem com outro servidor (nginx, Apache, container) ou se a
+  porta 8787 estiver ocupada, explicando o que encontrou.
+- Se a porta 3001 já estiver em uso, não instala o FreeLLMAPI.
+
+**Atenção a VMs criadas antes de junho de 2026 com 4 OCPUs / 24 GB:** elas passam do limite grátis atual.
+Reduza para 2 OCPUs / 12 GB (página da VM → *Edit* → *Shape*) antes do fim do trial, ou haverá cobrança.
+
 ## Só com tablet ou celular?
 
 Dá para fazer tudo sem computador:
@@ -97,7 +114,7 @@ sudo bash deploy/oracle/setup.sh
 ```
 
 O script instala Node 22, Docker e Caddy, libera 80/443 no firewall da VM, cria o usuário de serviço
-`startrek`, gera o `.env` com uma **senha de acesso** e o endereço `https://SEU-IP.sslip.io`, instala o
+`startrek`, gera o `.env` com uma **senha de acesso** e o endereço `https://startrek.SEU-IP.sslip.io`, instala o
 FreeLLMAPI preso em `127.0.0.1`, cria o serviço `star-trek-1` e configura o HTTPS.
 
 No fim ele mostra o **endereço** e a **senha**. Guarde a senha.
@@ -137,7 +154,7 @@ Deve aparecer `✓ servidor respondeu` e `✓ chat funcionando`.
 
 ## 7. Usar
 
-Abra o endereço (`https://SEU-IP.sslip.io`), digite a senha e recrute o primeiro tripulante.
+Abra o endereço (`https://startrek.SEU-IP.sslip.io`), digite a senha e recrute o primeiro tripulante.
 Funciona no celular e no tablet também.
 
 ## Dia a dia
