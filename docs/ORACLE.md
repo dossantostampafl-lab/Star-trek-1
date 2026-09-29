@@ -10,41 +10,72 @@ Internet ──https──▶ Caddy (443) ──▶ Star Trek 1 (127.0.0.1:8787)
 
 Só as portas 22 (SSH), 80 e 443 ficam abertas. A estação e o FreeLLMAPI escutam apenas dentro da VM.
 
-## 1. Criar a VM
+## Antes de começar
 
-No painel da Oracle Cloud: **Compute → Instances → Create instance**
+- Conta na Oracle Cloud (oracle.com/cloud/free). O cadastro pede cartão só para verificação.
+- A **região principal (home region)** escolhida no cadastro é definitiva, e os recursos grátis só existem nela.
+- Limite grátis atual do Ampere A1 (reduzido pela Oracle em junho de 2026): **2 OCPUs e 12 GB de RAM** no total,
+  e **200 GB** de disco somando todas as VMs.
+- A Oracle pode recuperar VMs grátis que ficam ociosas por muito tempo; a estação rodando normalmente costuma
+  evitar isso, mas faça backup de `/var/lib/startrek` de vez em quando.
 
-- **Image:** Canonical Ubuntu 24.04 (ou 22.04)
-- **Shape:** Ampere **VM.Standard.A1.Flex** — 2 OCPUs e 12 GB de RAM já sobram (o Always Free vai até 4 OCPUs / 24 GB)
-- **Networking:** deixe criar a VCN com sub-rede pública e marque **Assign a public IPv4 address**
-- **SSH keys:** envie a sua chave pública (ou baixe a gerada)
+## 1. Criar a chave SSH (no seu PC)
 
-Se aparecer "Out of capacity" para A1, tente outra *Availability Domain* ou mais tarde.
+No PowerShell (Windows) ou terminal (Mac/Linux):
 
-## 2. Abrir as portas 80 e 443 na Oracle
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/oracle_st1
+```
 
-**Networking → Virtual Cloud Networks →** sua VCN **→ Security Lists → Default Security List → Add Ingress Rules**:
+Aperte Enter para aceitar (ou defina uma frase-senha). Isso cria `oracle_st1` (privada, fica no PC) e
+`oracle_st1.pub` (pública, vai para a Oracle).
 
-| Source CIDR | Protocolo | Porta de destino |
+## 2. Criar a VM
+
+No painel da Oracle: menu **☰ → Compute → Instances → Create instance**.
+
+1. **Name:** `star-trek-1`.
+2. **Placement:** deixe o padrão (se der erro de capacidade, volte aqui e troque o *Availability domain*).
+3. **Image and shape → Change image:** *Ubuntu* → **Canonical Ubuntu 24.04** → Select.
+4. **Change shape:** *Virtual machine* → **Ampere** → **VM.Standard.A1.Flex** → **2 OCPUs** e **12 GB** de memória → Select.
+   Confira se aparece o selo *Always Free-eligible*.
+5. **Networking:** *Create new virtual cloud network* e *Create new public subnet* (padrões) e marque
+   **Automatically assign public IPv4 address**.
+6. **Add SSH keys:** *Upload public key files (.pub)* → escolha `oracle_st1.pub`.
+7. **Boot volume:** deixe o padrão (cerca de 47 GB).
+8. **Create**. Em 1–2 minutos o estado fica **Running**. Copie o **Public IP address**.
+
+**"Out of capacity for shape VM.Standard.A1.Flex"** é comum: tente outro *Availability domain*, 1 OCPU / 6 GB,
+ou de novo mais tarde (madrugada costuma funcionar).
+
+## 3. Abrir as portas 80 e 443 na Oracle
+
+Na página da VM: **Primary VNIC → Subnet →** (clique na sub-rede) **→ Security Lists → Default Security List →
+Add Ingress Rules**. Adicione duas regras:
+
+| Source CIDR | IP Protocol | Destination Port Range |
 | --- | --- | --- |
 | `0.0.0.0/0` | TCP | `80` |
 | `0.0.0.0/0` | TCP | `443` |
 
 Não abra a 3001 nem a 8787. (O firewall interno da VM o script de instalação ajusta sozinho.)
 
-## 3. Baixar o projeto na VM
+## 4. Entrar na VM e baixar o projeto
+
+No seu PC:
 
 ```bash
-ssh ubuntu@IP_DA_VM
+ssh -i ~/.ssh/oracle_st1 ubuntu@IP_DA_VM
+```
+
+Na VM:
+
+```bash
 sudo mkdir -p /opt/star-trek-1 && sudo chown ubuntu:ubuntu /opt/star-trek-1
 git clone https://github.com/dossantostampafl-lab/Star-trek-1.git /opt/star-trek-1
 ```
 
-O repositório é privado, então o `git clone` pede usuário e senha: use seu usuário do GitHub e um
-**token** (GitHub → Settings → Developer settings → Personal access tokens → *Fine-grained*, só com
-leitura de *Contents* deste repositório) no lugar da senha.
-
-## 4. Instalar
+## 5. Instalar
 
 ```bash
 cd /opt/star-trek-1
@@ -60,7 +91,7 @@ No fim ele mostra o **endereço** e a **senha**. Guarde a senha.
 Tem domínio próprio? Aponte um registro A para o IP da VM e rode
 `sudo DOMAIN=estacao.seudominio.com bash deploy/oracle/setup.sh`.
 
-## 5. Configurar o FreeLLMAPI
+## 6. Configurar o FreeLLMAPI
 
 O FreeLLMAPI junta os planos grátis de vários provedores (Groq, Google AI Studio, Mistral, OpenRouter…).
 Ele precisa que **você cadastre as chaves grátis desses provedores** no painel dele, e gera uma
@@ -69,7 +100,7 @@ Ele precisa que **você cadastre as chaves grátis desses provedores** no painel
 No **seu PC**, abra um túnel SSH (o painel não fica exposto na internet):
 
 ```bash
-ssh -L 3001:127.0.0.1:3001 ubuntu@IP_DA_VM
+ssh -i ~/.ssh/oracle_st1 -L 3001:127.0.0.1:3001 ubuntu@IP_DA_VM
 ```
 
 Com o túnel aberto, acesse `http://localhost:3001` no navegador:
@@ -88,7 +119,7 @@ cd /opt/star-trek-1 && node cli.js --check
 
 Deve aparecer `✓ servidor respondeu` e `✓ chat funcionando`.
 
-## 6. Usar
+## 7. Usar
 
 Abra o endereço (`https://SEU-IP.sslip.io`), digite a senha e recrute o primeiro tripulante.
 Funciona no celular e no tablet também.
@@ -119,10 +150,10 @@ e reinicie — a estação detecta e desliga a ferramenta.
 
 ## Problemas comuns
 
-- **O endereço não abre:** confira a Security List (passo 2) e `sudo iptables -L INPUT -n | head`.
+- **O endereço não abre:** confira a Security List (passo 3) e `sudo iptables -L INPUT -n | head`.
   O certificado só é emitido com as portas 80/443 abertas: `journalctl -u caddy -n 50`.
 - **"Com PUBLIC_URL definida, ACCESS_PASSWORD é obrigatória":** a senha no `.env` precisa ter 12+ caracteres.
-- **`✗ /models respondeu HTTP 401`:** falta a chave `FREELLMAPI_KEY` (passo 5).
+- **`✗ /models respondeu HTTP 401`:** falta a chave `FREELLMAPI_KEY` (passo 6).
 - **O instalador do FreeLLMAPI falhou:** instale à mão seguindo o README dele
   (https://github.com/tashfeenahmed/freellmapi) e garanta que a porta fique `127.0.0.1:3001:3001` no compose.
 - **Terminal aparece "sem docker":** `sudo systemctl status docker` e `sudo -u startrek docker ps`.

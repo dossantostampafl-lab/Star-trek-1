@@ -215,7 +215,7 @@ cat <<NEXT
 
   Próximos passos:
   1. No seu PC, abra um túnel para o painel do FreeLLMAPI:
-       ssh -L 3001:127.0.0.1:3001 $LOGIN_USER@${IP:-$DOMAIN}
+       ssh -i ~/.ssh/oracle_st1 -L 3001:127.0.0.1:3001 $LOGIN_USER@${IP:-$DOMAIN}
      e acesse http://localhost:3001 — crie a conta, adicione as chaves grátis dos provedores
      e copie a chave unificada (freellmapi-...) do topo do painel.
   2. Na VM:  sudo nano $ENV_FILE   → cole em FREELLMAPI_KEY
