@@ -5,6 +5,9 @@
 #   sudo bash deploy/oracle/setup.sh                  # tudo: Node, Docker, Caddy (HTTPS), FreeLLMAPI, serviço
 #   sudo bash deploy/oracle/setup.sh --sem-freellmapi # se o FreeLLMAPI já roda em outro lugar
 #   sudo DOMAIN=estacao.meudominio.com bash deploy/oracle/setup.sh   # usar seu domínio em vez do sslip.io
+#   sudo bash deploy/oracle/setup.sh --painel-fllm    # abre o painel do FreeLLMAPI em https://fllm.SEU-DOMINIO
+#                                                     # (com senha) — útil para configurar pelo tablet/celular.
+#                                                     # Rode de novo sem a opção para fechar o painel.
 #
 # Pode rodar de novo quando quiser: ele pula o que já está feito e não sobrescreve a sua senha nem o .env.
 set -euo pipefail
@@ -15,7 +18,11 @@ STATE_DIR="/var/lib/startrek"
 SERVICE="star-trek-1"
 PORT="8787"
 WITH_FLLM=1
-for a in "$@"; do [ "$a" = "--sem-freellmapi" ] && WITH_FLLM=0; done
+FLLM_PANEL=0
+for a in "$@"; do
+  [ "$a" = "--sem-freellmapi" ] && WITH_FLLM=0
+  [ "$a" = "--painel-fllm" ] && FLLM_PANEL=1
+done
 
 say()  { printf '\n\033[1;33m▶ %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
@@ -201,6 +208,20 @@ $DOMAIN {
 	}
 }
 CADDY
+if [ "$FLLM_PANEL" = 1 ]; then
+  # Painel do FreeLLMAPI pela internet, protegido por usuário/senha do Caddy (além do login do próprio FreeLLMAPI).
+  PANEL_HASH="$(caddy hash-password --plaintext "$(get_env ACCESS_PASSWORD)")"
+  cat >> /etc/caddy/Caddyfile <<CADDY
+
+fllm.$DOMAIN {
+	basic_auth {
+		admin $PANEL_HASH
+	}
+	reverse_proxy 127.0.0.1:3001
+	header -Server
+}
+CADDY
+fi
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || die "Caddyfile inválido"
 systemctl enable caddy >/dev/null 2>&1
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
@@ -214,10 +235,22 @@ else printf '  Senha:     a que já estava em %s (ACCESS_PASSWORD)\n' "$ENV_FILE
 cat <<NEXT
 
   Próximos passos:
+NEXT
+if [ "$FLLM_PANEL" = 1 ]; then cat <<NEXT
+  1. Abra o painel do FreeLLMAPI:  https://fllm.$DOMAIN
+     usuário: admin   senha: a mesma senha de acesso da estação
+     Crie a conta, adicione as chaves grátis dos provedores e copie a chave unificada (freellmapi-...)
+     do topo da página Keys. Depois de configurar, feche o painel rodando o setup de novo sem --painel-fllm.
+NEXT
+else cat <<NEXT
   1. No seu PC, abra um túnel para o painel do FreeLLMAPI:
        ssh -i ~/.ssh/oracle_st1 -L 3001:127.0.0.1:3001 $LOGIN_USER@${IP:-$DOMAIN}
      e acesse http://localhost:3001 — crie a conta, adicione as chaves grátis dos provedores
      e copie a chave unificada (freellmapi-...) do topo do painel.
+     (Sem PC? Rode de novo com --painel-fllm para abrir o painel no navegador do tablet.)
+NEXT
+fi
+cat <<NEXT
   2. Na VM:  sudo nano $ENV_FILE   → cole em FREELLMAPI_KEY
   3. Reinicie:  sudo systemctl restart $SERVICE
   4. Teste:     cd $APP_DIR && node cli.js --check

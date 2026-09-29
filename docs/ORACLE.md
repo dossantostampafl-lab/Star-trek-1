@@ -10,6 +10,20 @@ Internet ──https──▶ Caddy (443) ──▶ Star Trek 1 (127.0.0.1:8787)
 
 Só as portas 22 (SSH), 80 e 443 ficam abertas. A estação e o FreeLLMAPI escutam apenas dentro da VM.
 
+## Só com tablet ou celular?
+
+Dá para fazer tudo sem computador:
+
+- **Painel da Oracle:** funciona no navegador do tablet.
+- **Chave SSH:** na criação da VM (passo 2), escolha **Generate a key pair for me** e toque em
+  **Save private key**. Pule o passo 1.
+- **Terminal SSH:** instale o app **Termius** (iPad/Android), vá em *Keychain → Import key* e importe o
+  arquivo baixado. Crie um host com o IP da VM, usuário `ubuntu` e essa chave.
+  (Alternativa sem app: **Cloud Shell**, o terminal que abre no topo do painel da Oracle.)
+- **Painel do FreeLLMAPI:** instale com `sudo bash deploy/oracle/setup.sh --painel-fllm`. O painel abre em
+  `https://fllm.SEU-IP.sslip.io` (usuário `admin`, senha = senha da estação), sem túnel SSH. Depois de
+  configurar, rode o setup de novo **sem** a opção para fechar o painel.
+
 ## Antes de começar
 
 - Conta na Oracle Cloud (oracle.com/cloud/free). O cadastro pede cartão só para verificação.
@@ -97,7 +111,9 @@ O FreeLLMAPI junta os planos grátis de vários provedores (Groq, Google AI Stud
 Ele precisa que **você cadastre as chaves grátis desses provedores** no painel dele, e gera uma
 **chave unificada** (`freellmapi-...`) que o Star Trek 1 usa.
 
-No **seu PC**, abra um túnel SSH (o painel não fica exposto na internet):
+**Pelo tablet:** use o painel web (`--painel-fllm`, veja "Só com tablet ou celular?").
+
+**Pelo PC**, abra um túnel SSH (o painel não fica exposto na internet):
 
 ```bash
 ssh -i ~/.ssh/oracle_st1 -L 3001:127.0.0.1:3001 ubuntu@IP_DA_VM
