@@ -63,7 +63,9 @@
   function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 120); }
 
   function renderAll() {
+    Station.setDecor(S.decor);
     Station.setData(S.agents, S.conveyors, S.status);
+    if (Station.isEditing()) renderEditor();
     Station.setSelected(selected);
     renderTop(); renderCrew(); renderAgentSelects(); renderChatHead(); renderBelts(); renderSchedules(); renderMcp(); renderLog(); renderFilesScope();
   }
@@ -717,8 +719,62 @@
     setTimeout(() => connect((attempt || 0) + 1), Math.min(10000, 800 * Math.pow(2, attempt || 0)));
   }
 
+  // ---------- editor da estação ----------
+  let edPalette = false;
+  const edAgent = () => S.agents.find(a => a.id === Station.editRoom);
+  function renderEditor() {
+    const a = edAgent();
+    $('#ed-room').textContent = a ? 'Sala: ' + a.name : 'Toque numa sala';
+    const hasProp = Station.editProp >= 0;
+    $('#ed-flip').disabled = !hasProp; $('#ed-del').disabled = !hasProp;
+    $('#ed-reset').disabled = !a;
+    const d = S.decor || { characters: {}, furniture: {} };
+    if (!edPalette) {
+      edPalette = true;
+      $('#ed-chars').replaceChildren(...Object.entries(d.characters).map(([k, label]) => h('button', { type: 'button', 'data-k': k, title: label, 'aria-label': label, onclick: safe(() => setLook({ sprite: k })) },
+        h('span', { class: 'ed-char', style: "background-image:url('assets/crew/" + k + ".png')" }))));
+      $('#ed-furn').replaceChildren(...Object.entries(d.furniture).map(([k, f]) => h('button', { type: 'button', class: 'ed-furn', title: f[2], 'aria-label': 'Pôr ' + f[2], onclick: safe(() => saveProps(Station.addProp(k))) },
+        h('img', { src: 'assets/furniture/' + k + '.png', alt: '' }))));
+    }
+    for (const b of $$('#ed-chars button')) b.classList.toggle('on', !!a && a.sprite === b.dataset.k);
+  }
+  async function setLook(patch) {
+    const a = edAgent(); if (!a) return toast('Toque numa sala primeiro.', true);
+    Object.assign(a, patch);
+    await api('PATCH', '/api/agents/' + a.id, patch);
+    refreshSoon();
+  }
+  async function saveProps(props) {
+    if (!props) return toast('Toque numa sala primeiro.', true);
+    renderEditor();
+    await setLook({ props });
+  }
+  function toggleEdit(on) {
+    Station.setEditMode(on);
+    $('#editor').hidden = !on;
+    $('#deck-edit').classList.toggle('on', on);
+    $('#deck-edit').textContent = on ? '✏️ Editando…' : '✏️ Editar estação';
+    $('.deck').classList.toggle('editing', on);
+    $('.layout').classList.toggle('editing', on);
+    if (on) renderEditor();
+  }
+  $('#deck-edit').addEventListener('click', () => toggleEdit(!Station.isEditing()));
+  $('#ed-done').addEventListener('click', () => toggleEdit(false));
+  $('#ed-flip').addEventListener('click', safe(() => saveProps(Station.flipProp())));
+  $('#ed-del').addEventListener('click', safe(() => saveProps(Station.removeProp())));
+  $('#ed-reset').addEventListener('click', safe(async () => {
+    const a = edAgent(); if (!a || !confirm('Voltar a sala de ' + a.name + ' ao visual padrão?')) return;
+    await api('PATCH', '/api/agents/' + a.id, { reset_look: true });
+    await refresh();
+  }));
+
   // ---------- início ----------
-  Station.init($('#station'), { onSelect: openChat });
+  Station.init($('#station'), {
+    onSelect: openChat,
+    onEditSelect: () => renderEditor(),
+    onPropsChange: safe((id, props) => api('PATCH', '/api/agents/' + id, { props }).then(refreshSoon)),
+    onMoveRoom: safe(async (id, x, y) => { await api('PATCH', '/api/agents/' + id, { room_x: x, room_y: y }); await refresh(); })
+  });
   resetAgentForm();
   loadBeliefs();
   const initialTab = location.hash.slice(1);

@@ -53,7 +53,22 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* ---------- layout ---------- */
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 420px; height: calc(100vh - 52px); height: calc(100dvh - 52px); }
 .deck { position: relative; overflow: hidden; border-right: 1px solid var(--line); min-height: 280px; }
-#station { display: block; width: 100%; height: 100%; image-rendering: pixelated; cursor: pointer; }
+#station { display: block; width: 100%; flex: 1 1 auto; min-height: 0; image-rendering: pixelated; cursor: pointer; }
+.deck { display: flex; flex-direction: column; }
+.deck-edit { position: absolute; right: 10px; top: 10px; font: inherit; font-size: 12px; cursor: pointer; color: var(--ink); background: rgba(7,11,18,.8); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; }
+.deck-edit:hover, .deck-edit.on { color: var(--amber); border-color: var(--amber); }
+.deck.editing .deck-hint { display: none; }
+.editor { flex: 0 0 auto; border-top: 1px solid var(--line); background: var(--hull-2); padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 4px; }
+.editor[hidden] { display: none; }
+.ed-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ed-bar b { color: var(--amber); }
+.ed-label { font-size: 11px; color: var(--ink-dim); letter-spacing: .04em; margin-top: 2px; }
+.ed-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.ed-strip button { flex: 0 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 3px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.ed-strip button:hover, .ed-strip button.on { border-color: var(--amber); background: var(--panel-2); }
+.ed-char { width: 32px; height: 48px; background-repeat: no-repeat; background-size: 256px auto; background-position: 0 0; image-rendering: pixelated; }
+.ed-furn { height: 40px; min-width: 40px; max-width: 110px; }
+.ed-furn img { max-height: 34px; max-width: 104px; image-rendering: pixelated; }
 .deck-hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--ink-dim); background: rgba(7,11,18,.75); padding: 4px 8px; border-radius: var(--radius); pointer-events: none; }
 .panel { display: flex; flex-direction: column; min-height: 0; background: var(--hull-2); }
 
@@ -63,6 +78,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .item .grow { flex-basis: 60%; }
   .row2 { grid-template-columns: 1fr; }
   .deck { border-right: 0; border-bottom: 1px solid var(--line); }
+  .layout.editing { grid-template-rows: 78vh auto; }
   .panel { min-height: 58vh; }
 }
 

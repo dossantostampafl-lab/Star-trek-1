@@ -59,7 +59,7 @@ const PRESET = {
 
 function freeRoom(db) {
   const used = new Set(db.listAgents().map(a => a.room_x + ',' + a.room_y));
-  for (let y = 0; y < 20; y++) for (let x = 0; x < 4; x++) if (!used.has(x + ',' + y)) return { room_x: x, room_y: y };
+  for (let y = 0; y < 20; y++) for (let x = 0; x < 3; x++) if (!used.has(x + ',' + y)) return { room_x: x, room_y: y };
   return { room_x: 0, room_y: 0 };
 }
 

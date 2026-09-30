@@ -20,6 +20,7 @@ const { makeJail } = require('./tools/fs.js');
 const mcpCatalog = require('./mcp-catalog.js');
 const missionsMod = require('./missions.js');
 const { makeGrowth } = require('./growth.js');
+const decor = require('./decor.js');
 
 const WEB = path.join(ROOT, 'web');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -61,6 +62,7 @@ async function start(overrides) {
     const r = crew.applyPreset(db);
     log('tripulação pronta: ' + r.created.join(', '));
   }
+  decor.ensureLooks(db);   // bancos antigos: dá personagem e móveis a quem ainda não tem
 
   // ---- permissões: pedidos vão para a interface; sem interface aberta = negado
   const pendingConsent = new Map();
@@ -172,6 +174,7 @@ async function start(overrides) {
       growth: growth.summary(),
       pendingBeliefs: db.listBeliefs().filter(b => b.status === 'proposta').length,
       shellAvailable,
+      decor: { room: [decor.ROOM_W, decor.ROOM_H, decor.WALL_H], furniture: decor.FURNITURE, characters: decor.CHARACTERS },
       authEnabled: auth.enabled,
       provider: { name: config.provider.name, model: config.provider.model, fallback: config.fallback ? config.fallback.name : null }
     };
@@ -201,6 +204,10 @@ async function start(overrides) {
     if (b.shell !== undefined) out.shell = !!b.shell;
     if (b.captain !== undefined) out.captain = !!b.captain;
     if (b.mcp !== undefined) out.mcp = Array.isArray(b.mcp) ? b.mcp.map(String).slice(0, 20) : [];
+    try {
+      if (b.sprite !== undefined && b.sprite !== '') out.sprite = decor.cleanSprite(b.sprite);
+      if (b.props !== undefined) out.props = decor.cleanProps(b.props);
+    } catch (e) { throw httpErr(400, e.message); }
     if (!partial && !out.name) throw httpErr(400, 'dê um nome ao agente');
     return out;
   }
@@ -266,7 +273,15 @@ async function start(overrides) {
       }
       const a = agentOr404(seg[1]);
       if (seg.length === 2 && m === 'PATCH') {
-        const b = cleanAgent(await readBody(req), true);
+        const raw = await readBody(req);
+        const b = cleanAgent(raw, true);
+        if (raw.reset_look) Object.assign(b, decor.defaultLook(a));   // "↺ padrão" no editor
+        // mover sala: se o lugar já tem alguém, os dois trocam de lugar
+        if (b.room_x !== undefined || b.room_y !== undefined) {
+          const nx = b.room_x !== undefined ? b.room_x : a.room_x, ny = b.room_y !== undefined ? b.room_y : a.room_y;
+          const other = db.listAgents().find(o => o.id !== a.id && o.room_x === nx && o.room_y === ny);
+          if (other) db.updateAgent(other.id, { room_x: a.room_x, room_y: a.room_y });
+        }
         const upd = db.updateAgent(a.id, b);
         station.invalidate(a.id);
         bus.emit({ type: 'state_changed' });
@@ -538,7 +553,7 @@ async function start(overrides) {
     const rel = path.basename(file);
     const headers = {
       'content-type': MIME[path.extname(file)] || 'application/octet-stream',
-      'cache-control': 'no-cache',
+      'cache-control': file.includes(path.sep + 'assets' + path.sep) ? 'public, max-age=86400' : 'no-cache',
       'x-content-type-options': 'nosniff',
       'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
       'referrer-policy': 'no-referrer'

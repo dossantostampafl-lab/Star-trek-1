@@ -13,6 +13,7 @@ process.emitWarning = function (w, ...rest) {
   return origEmit.call(process, w, ...rest);
 };
 const { DatabaseSync } = require('node:sqlite');
+const decor = require('./decor.js');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS agents (
@@ -83,6 +84,7 @@ function openDb(file) {
   addCol('agents', 'xp', 'INTEGER DEFAULT 0');
   addCol('agents', 'trust', 'INTEGER DEFAULT 50');
   addCol('agents', 'props', "TEXT DEFAULT '[]'");
+  addCol('agents', 'sprite', "TEXT DEFAULT ''");
   addCol('runs', 'rating', 'INTEGER DEFAULT 0');
 
   const q = (sql) => db.prepare(sql);
@@ -91,7 +93,7 @@ function openDb(file) {
   const agentRow = (r) => r && Object.assign(plain(r), { shell: !!r.shell, captain: !!r.captain, mcp: json(r.mcp, []), props: json(r.props, []) });
 
   const missionRow = (r) => r && Object.assign(plain(r), { steps: json(r.steps, []), log: json(r.log, []) });
-  const AGENT_FIELDS = ['name', 'role', 'instructions', 'provider', 'model', 'color', 'room_x', 'room_y', 'budget_usd', 'shell', 'captain', 'mcp', 'xp', 'trust', 'props'];
+  const AGENT_FIELDS = ['name', 'role', 'instructions', 'provider', 'model', 'color', 'room_x', 'room_y', 'budget_usd', 'shell', 'captain', 'mcp', 'xp', 'trust', 'props', 'sprite'];
 
   const api = {
     raw: db,
@@ -105,7 +107,9 @@ function openDb(file) {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, String(a.name || 'Tripulante').slice(0, 40), a.role || '', a.instructions || '', a.provider || '', a.model || '',
         a.color || '#5ec8ff', a.room_x | 0, a.room_y | 0, Number(a.budget_usd) || 0, a.shell ? 1 : 0, a.captain ? 1 : 0, JSON.stringify(a.mcp || []), now());
-      return api.getAgent(id);
+      // aparência: personagem e móveis padrão pelo tipo de tripulante (o comandante troca no editor)
+      const look = decor.defaultLook(Object.assign({ id }, a));
+      return api.updateAgent(id, { sprite: a.sprite || look.sprite, props: Array.isArray(a.props) ? a.props : look.props });
     },
     updateAgent(id, patch) {
       const sets = [], vals = [];

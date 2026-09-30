@@ -23,6 +23,21 @@
   <section class="deck" aria-label="Mapa da estação">
     <canvas id="station" aria-label="Estação: salas dos agentes e esteiras"></canvas>
     <div class="deck-hint" id="deck-hint">Toque numa sala para falar com o tripulante.</div>
+    <button class="deck-edit" id="deck-edit" type="button">✏️ Editar estação</button>
+    <div class="editor" id="editor" hidden>
+      <div class="ed-bar">
+        <b id="ed-room">—</b>
+        <span class="grow"></span>
+        <button class="btn small ghost" id="ed-flip" type="button" disabled title="Espelhar o móvel selecionado">↔ Espelhar</button>
+        <button class="btn small danger" id="ed-del" type="button" disabled title="Remover o móvel selecionado">🗑 Remover</button>
+        <button class="btn small ghost" id="ed-reset" type="button" title="Voltar personagem e móveis ao padrão">↺ Padrão</button>
+        <button class="btn small primary" id="ed-done" type="button">Concluir</button>
+      </div>
+      <div class="ed-label">Personagem</div>
+      <div class="ed-strip" id="ed-chars"></div>
+      <div class="ed-label">Móveis — toque para pôr na sala, depois arraste</div>
+      <div class="ed-strip" id="ed-furn"></div>
+    </div>
   </section>
 
   <aside class="panel">

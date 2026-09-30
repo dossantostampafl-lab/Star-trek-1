@@ -58,6 +58,18 @@ use o botão **Embarcar** (aba Tripulação) — ele só cria o que falta.
 
 Fale só com o Capitão: o pedido percorre a esteira sozinho e o resumo final volta para ele.
 
+## Visual e editor da estação
+
+Cada tripulante tem um personagem animado (anda pela sala, vai até a mesa e digita quando está trabalhando)
+e uma sala mobiliada de acordo com a função. Toque em **✏️ Editar estação** (canto do mapa) para:
+
+- **trocar o personagem** do tripulante (17 opções);
+- **pôr móveis** (48 peças: mesas, consoles, telões, plantas, sofás…) — toque na peça e depois arraste dentro da sala;
+- **espelhar** ou **remover** a peça selecionada, ou voltar a sala ao **↺ padrão**;
+- **mudar a sala de lugar** — escolha a sala e toque num contorno vazio (se já houver alguém lá, os dois trocam).
+
+Tudo é salvo na hora. A arte vem do StarNet (MIT) — créditos em `web/assets/NOTICE.md`.
+
 ## Arquivos
 
 Aba **Arquivos** (ou o 📎 no Canal): envie arquivos de até 25 MB. Eles vão para a **pasta compartilhada**
@@ -153,12 +165,14 @@ server/
   cron.js              agendamento (sem dependências)
   mcp.js               cliente MCP (stdio e HTTP)
   db.js                SQLite (node:sqlite)
+  decor.js             personagens e móveis de cada sala (catálogo, validação, visual padrão)
   auth.js              login por senha (acesso pela internet)
 deploy/oracle/         instalação e atualização na Oracle Cloud
 docs/ORACLE.md         guia passo a passo da Oracle
 web/
   index.html, style.css, app.js   painel
-  station.js           mapa em pixel-art (desenhado por código, sem imagens)
+  station.js           mapa da estação: personagens animados, móveis, esteiras e o editor
+  assets/              personagens e móveis em pixel-art (StarNet, MIT — ver NOTICE.md)
   voice.js             voz do navegador (pt-BR)
 test/                  testes com provedores e MCP simulados — npm test
 ```
