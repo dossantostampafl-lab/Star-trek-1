@@ -160,3 +160,22 @@ test('web_search: lê os resultados do DuckDuckGo (links reais, sem anúncios)',
   assert.equal(r[0].title, 'Título A');
   assert.equal(r[0].snippet, 'Trecho & mais');
 });
+
+test('contexto enxuto: corta histórico antigo sem deixar ferramenta órfã e encolhe resultados velhos', () => {
+  const { compactForModel } = require('../server/loop.js');
+  const msgs = [{ role: 'system', content: 'S' }];
+  for (let i = 0; i < 20; i++) {
+    msgs.push({ role: 'user', content: 'p' + i });
+    msgs.push({ role: 'assistant', content: '', tool_calls: [{ id: 'c' + i, name: 'x', args: '{}' }] });
+    msgs.push({ role: 'tool', tool_call_id: 'c' + i, content: 'R'.repeat(5000) });
+    msgs.push({ role: 'assistant', content: 'r' + i });
+  }
+  const out = compactForModel(msgs, 10);
+  assert.equal(out[0].role, 'system');
+  assert.equal(out[1].role, 'user', 'começa numa pergunta');
+  assert.ok(out.length <= 11);
+  const tools = out.filter(m => m.role === 'tool');
+  assert.ok(tools.slice(0, -1).every(t => t.content.length < 700), 'antigos encolhidos');
+  assert.equal(tools[tools.length - 1].content.length, 5000, 'turno atual intacto');
+  assert.equal(msgs[3].content.length, 5000, 'histórico original não é alterado');
+});

@@ -22,7 +22,7 @@ async function runAgent(opts) {
     if (opts.beforeStep) await opts.beforeStep(usage);   // ex.: orçamento — lança erro para parar
     emit({ type: 'step', step });
 
-    const r = await provider.chat({ messages, tools, signal, onText: (t) => emit({ type: 'text', text: t }) });
+    const r = await provider.chat({ messages: compactForModel(messages, opts.contextMessages), tools, signal, onText: (t) => emit({ type: 'text', text: t }) });
     usage.input += r.usage.input || 0;
     usage.output += r.usage.output || 0;
     emit({ type: 'model', provider: r.provider || provider.name, model: r.model, routedVia: r.routedVia || '' });
@@ -55,7 +55,7 @@ async function runAgent(opts) {
 
   // Limite de passos: pede um fechamento sem ferramentas para não terminar mudo.
   messages.push({ role: 'user', content: 'Limite de passos atingido. Resuma em poucas linhas o que foi feito e o que falta, sem usar ferramentas.' });
-  const r = await provider.chat({ messages, tools: [], signal, onText: (t) => emit({ type: 'text', text: t }) });
+  const r = await provider.chat({ messages: compactForModel(messages, opts.contextMessages), tools: [], signal, onText: (t) => emit({ type: 'text', text: t }) });
   usage.input += r.usage.input || 0;
   usage.output += r.usage.output || 0;
   messages.push({ role: 'assistant', content: r.text || '' });
@@ -82,4 +82,30 @@ async function guardedRun(opts, call, signal, emit) {
   return registry.run(call.name, call.args, Object.assign({ signal }, opts.toolCtx || {}));
 }
 
-module.exports = { runAgent };
+/* Contexto enxuto para o modelo (o histórico completo continua salvo):
+   - só as últimas `keep` mensagens, sempre começando numa pergunta do usuário (tool_calls nunca ficam órfãs);
+   - resultados de ferramentas de turnos antigos encolhem para 600 caracteres.
+   Menos tokens = resposta bem mais rápida, principalmente em modelos grátis. */
+const OLD_TOOL_CHARS = 600;
+function compactForModel(messages, keep) {
+  keep = keep || 30;
+  const system = messages[0] && messages[0].role === 'system' ? [messages[0]] : [];
+  let rest = messages.slice(system.length);
+  if (rest.length > keep) {
+    let cut = rest.length - keep;
+    while (cut < rest.length && rest[cut].role !== 'user') cut++;
+    if (cut >= rest.length) cut = rest.length - 1;
+    rest = rest.slice(cut);
+  }
+  // posição da última pergunta do usuário: o que vem depois dela é o turno atual (não encolhe)
+  let lastUser = -1;
+  for (let i = rest.length - 1; i >= 0; i--) if (rest[i].role === 'user') { lastUser = i; break; }
+  rest = rest.map((m, i) => {
+    if (i >= lastUser || m.role !== 'tool') return m;
+    const c = String(m.content || '');
+    return c.length > OLD_TOOL_CHARS ? Object.assign({}, m, { content: c.slice(0, OLD_TOOL_CHARS) + '\n… (resultado antigo resumido)' }) : m;
+  });
+  return system.concat(rest);
+}
+
+module.exports = { runAgent, compactForModel };
