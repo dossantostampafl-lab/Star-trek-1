@@ -25,7 +25,14 @@ async function httpError(provider, res) {
     : res.status === 404 ? ' — confira a URL base e o nome do modelo'
     : res.status === 429 ? ' — limite/cota atingido'
     : '';
-  return new ProviderError(provider, 'HTTP ' + res.status + ': ' + String(detail).slice(0, 300) + hint, { status: res.status });
+  const err = new ProviderError(provider, 'HTTP ' + res.status + ': ' + String(detail).slice(0, 400) + hint, { status: res.status });
+  // quanto esperar antes de tentar de novo: cabeçalho Retry-After ou "reset ~15s" no texto (FreeLLMAPI)
+  const ra = Number(res.headers && res.headers.get && res.headers.get('retry-after'));
+  const m = String(detail).match(/reset\s*~?\s*(\d+)\s*s/i);
+  err.retryAfterMs = ra > 0 ? ra * 1000 : m ? Number(m[1]) * 1000 : 0;
+  // o pedido ficou grande demais para os modelos disponíveis: vale tentar de novo com menos contexto
+  err.tooLarge = /too large|context length|maximum context|prompt is too long|too many tokens/i.test(String(detail));
+  return err;
 }
 
 function networkError(provider, err, baseUrl) {

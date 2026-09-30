@@ -156,7 +156,7 @@ function makeMcpManager(deps) {
           name: ('mcp__' + safeName(name) + '__' + safeName(t.name)).slice(0, 64),
           scope: 'external',
           server: name,
-          description: '[' + name + '] ' + (t.description || t.name).slice(0, 900),
+          description: '[' + name + '] ' + (t.description || t.name).replace(/\s+/g, ' ').slice(0, 300),
           parameters: t.inputSchema && t.inputSchema.type === 'object' ? t.inputSchema : { type: 'object', properties: {} },
           async run(args, ctx) {
             const cur = conns.get(name);

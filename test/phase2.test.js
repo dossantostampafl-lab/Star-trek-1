@@ -149,3 +149,26 @@ test('provedor travado: a chamada desiste no tempo limite em vez de esperar para
     assert.ok(Date.now() - t0 < 3000);
   } finally { srv.closeAllConnections(); await new Promise(r => srv.close(r)); }
 });
+
+test('limite de uso (429 com "reset ~1s"): espera e tenta de novo', async () => {
+  const mock = await startMock([{ status: 429, message: 'All models exhausted. Soonest reset ~1s.' }, { text: 'Voltei.' }]);
+  try {
+    const t0 = Date.now();
+    const r = await createAgent(cfgFor(mock.url), { retries: 1, log: () => {} }).send('oi');
+    assert.equal(r.text, 'Voltei.');
+    assert.ok(Date.now() - t0 >= 1500, 'esperou o reset pedido');
+  } finally { await mock.close(); }
+});
+
+test('pedido grande demais: tenta de novo com bem menos histórico', async () => {
+  const mock = await startMock([{ status: 413, message: '3 prompt too large for the model' }, { text: 'Coube.' }]);
+  try {
+    const agent = createAgent(cfgFor(mock.url), { retries: 0, log: () => {}, history: Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'msg ' + i })) });
+    const events = [];
+    const r = await agent.send('agora', { onEvent: e => events.push(e) });
+    assert.equal(r.text, 'Coube.');
+    assert.ok(mock.calls[1].body.messages.length <= 8, 'segunda tentativa bem menor');
+    assert.ok(mock.calls[0].body.messages.length > mock.calls[1].body.messages.length);
+    assert.ok(events.some(e => e.type === 'warning'));
+  } finally { await mock.close(); }
+});

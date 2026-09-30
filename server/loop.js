@@ -22,7 +22,7 @@ async function runAgent(opts) {
     if (opts.beforeStep) await opts.beforeStep(usage);   // ex.: orçamento — lança erro para parar
     emit({ type: 'step', step });
 
-    const r = await provider.chat({ messages: compactForModel(messages, opts.contextMessages), tools, signal, onText: (t) => emit({ type: 'text', text: t }) });
+    const r = await chatFitting(provider, messages, tools, signal, emit, opts.contextMessages);
     usage.input += r.usage.input || 0;
     usage.output += r.usage.output || 0;
     emit({ type: 'model', provider: r.provider || provider.name, model: r.model, routedVia: r.routedVia || '' });
@@ -82,13 +82,27 @@ async function guardedRun(opts, call, signal, emit) {
   return registry.run(call.name, call.args, Object.assign({ signal }, opts.toolCtx || {}));
 }
 
+/* Chama o modelo; se o provedor disser que o pedido ficou grande demais (ou esgotou tudo por tamanho),
+   tenta de novo com bem menos contexto antes de desistir. */
+async function chatFitting(provider, messages, tools, signal, emit, keep) {
+  const onText = (t) => emit({ type: 'text', text: t });
+  try {
+    return await provider.chat({ messages: compactForModel(messages, keep), tools, signal, onText });
+  } catch (e) {
+    if (!e.tooLarge || e.streamed) throw e;
+    emit({ type: 'warning', message: 'mensagem grande demais para os modelos grátis — tentando com menos histórico' });
+    return provider.chat({ messages: compactForModel(messages, 6, 200), tools, signal, onText });
+  }
+}
+
 /* Contexto enxuto para o modelo (o histórico completo continua salvo):
    - só as últimas `keep` mensagens, sempre começando numa pergunta do usuário (tool_calls nunca ficam órfãs);
    - resultados de ferramentas de turnos antigos encolhem para 600 caracteres.
    Menos tokens = resposta bem mais rápida, principalmente em modelos grátis. */
 const OLD_TOOL_CHARS = 600;
-function compactForModel(messages, keep) {
+function compactForModel(messages, keep, toolChars) {
   keep = keep || 30;
+  const maxOld = toolChars || OLD_TOOL_CHARS;
   const system = messages[0] && messages[0].role === 'system' ? [messages[0]] : [];
   let rest = messages.slice(system.length);
   if (rest.length > keep) {
@@ -103,7 +117,7 @@ function compactForModel(messages, keep) {
   rest = rest.map((m, i) => {
     if (i >= lastUser || m.role !== 'tool') return m;
     const c = String(m.content || '');
-    return c.length > OLD_TOOL_CHARS ? Object.assign({}, m, { content: c.slice(0, OLD_TOOL_CHARS) + '\n… (resultado antigo resumido)' }) : m;
+    return c.length > maxOld ? Object.assign({}, m, { content: c.slice(0, maxOld) + '\n… (resultado antigo resumido)' }) : m;
   });
   return system.concat(rest);
 }

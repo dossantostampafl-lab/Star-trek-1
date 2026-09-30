@@ -37,7 +37,8 @@ function withResilience(primary, fallback, opts) {
         }
         lastErr = e;
         if (e.name === 'AbortError' || !e.retryable || streamed || i === retries) throw Object.assign(e, { streamed });
-        const wait = 800 * Math.pow(2, i);
+        // limite de uso (429): espera o tempo que o provedor pediu (até 45s); senão, espera curta crescente
+        const wait = e.retryAfterMs ? Math.min(e.retryAfterMs + 1000, 45000) : e.status === 429 ? 5000 * (i + 1) : 800 * Math.pow(2, i);
         log('aviso: ' + e.message + ' — tentando de novo em ' + (wait / 1000) + 's');
         await sleep(wait, req.signal);
       }
