@@ -3,6 +3,7 @@
    Regra: só troca de provedor se nada foi transmitido ainda (evita resposta duplicada/misturada). */
 const { makeOpenAICompat } = require('./openai-compat.js');
 const { makeAnthropic } = require('./anthropic.js');
+const { ProviderError } = require('./errors.js');
 
 function makeProvider(cfg) {
   if (cfg.kind === 'anthropic') return makeAnthropic(cfg);
@@ -18,6 +19,7 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
 function withResilience(primary, fallback, opts) {
   opts = opts || {};
   const retries = opts.retries != null ? opts.retries : 2;
+  const timeoutMs = opts.timeoutMs || Number(process.env.MODEL_TIMEOUT_MS) || 120000;
   const log = opts.log || (() => {});
 
   async function attempt(p, req) {
@@ -25,8 +27,14 @@ function withResilience(primary, fallback, opts) {
     const onText = req.onText ? (t) => { streamed = true; req.onText(t); } : null;
     let lastErr;
     for (let i = 0; i <= retries; i++) {
-      try { return await p.chat(Object.assign({}, req, { onText })); }
+      // tempo limite por chamada: sem isso, um provedor travado deixa o tripulante esperando para sempre
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const signal = req.signal ? AbortSignal.any([req.signal, timeout]) : timeout;
+      try { return await p.chat(Object.assign({}, req, { onText, signal })); }
       catch (e) {
+        if (timeout.aborted && !(req.signal && req.signal.aborted)) {
+          e = new ProviderError(p.name, 'sem resposta em ' + Math.round(timeoutMs / 1000) + 's (provedor lento ou cota esgotada)', { retryable: true });
+        }
         lastErr = e;
         if (e.name === 'AbortError' || !e.retryable || streamed || i === retries) throw Object.assign(e, { streamed });
         const wait = 800 * Math.pow(2, i);

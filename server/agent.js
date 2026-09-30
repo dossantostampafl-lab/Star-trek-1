@@ -46,7 +46,7 @@ function createAgent(config, opts) {
   const profile = opts.profile || {};
   const agentId = profile.id || 'cli';
   const workspace = opts.workspace || config.workspace;
-  const provider = opts.provider || buildProvider(agentProviderConfig(config, profile), { log: opts.log, retries: opts.retries });
+  const provider = opts.provider || buildProvider(agentProviderConfig(config, profile), { log: opts.log, retries: opts.retries, timeoutMs: opts.timeoutMs });
   const registry = makeRegistry();
   const shared = opts.sharedDir ? fsTools(opts.sharedDir, { prefix: 'shared_', label: 'pasta COMPARTILHADA da tripulação (arquivos enviados pelo comandante ficam em entrada/)' }) : [];
   for (const t of [getTime, webSearch, fetchUrl, ...fsTools(workspace), ...shared, ...(opts.extraTools || [])]) registry.register(t);

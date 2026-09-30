@@ -136,3 +136,16 @@ test('custo: FreeLLMAPI é zero; Sonnet cobra por token', () => {
   assert.equal(costOf('anthropic', 'claude-sonnet-5-5', { input: 1e6, output: 1e6 }).usd, 18);
   assert.equal(costOf('openai', 'modelo-desconhecido', { input: 5, output: 5 }).known, false);
 });
+
+test('provedor travado: a chamada desiste no tempo limite em vez de esperar para sempre', async () => {
+  const http = require('node:http');
+  const srv = http.createServer(() => { /* nunca responde */ });
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  try {
+    const url = 'http://127.0.0.1:' + srv.address().port;
+    const agent = createAgent(cfgFor(url), { retries: 0, timeoutMs: 300, log: () => {} });
+    const t0 = Date.now();
+    await assert.rejects(agent.send('oi'), /sem resposta em 0s|sem resposta/);
+    assert.ok(Date.now() - t0 < 3000);
+  } finally { srv.closeAllConnections(); await new Promise(r => srv.close(r)); }
+});
