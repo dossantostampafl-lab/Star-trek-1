@@ -20,7 +20,10 @@ function systemPrompt(profile) {
     'Se uma permissão for negada, não insista: siga de outro jeito ou explique.',
     'Quando a tarefa estiver concluída, responda sem chamar ferramentas.'
   ];
+  if (profile.captain) lines.push('Missões: para objetivos que levam várias etapas ou dias, crie uma missão (mission_create). O turno da noite avança as missões ativas.');
+  else lines.push('Se o trabalho faz parte de uma missão (M1, M2…), registre o progresso com mission_update.');
   if (profile.instructions) lines.push('', 'Instruções do comandante:', profile.instructions);
+  if (profile.extraContext) lines.push('', profile.extraContext);
   return lines.join('\n');
 }
 

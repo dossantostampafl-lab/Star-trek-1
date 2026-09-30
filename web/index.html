@@ -29,6 +29,7 @@
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="crew" class="on">Tripulação</button>
       <button role="tab" data-tab="chat">Canal</button>
+      <button role="tab" data-tab="missions">Missões</button>
       <button role="tab" data-tab="belts">Esteiras</button>
       <button role="tab" data-tab="sched">Agenda</button>
       <button role="tab" data-tab="files">Arquivos</button>
@@ -38,6 +39,15 @@
 
     <!-- TRIPULAÇÃO -->
     <div class="tab-body on" data-body="crew">
+      <details class="card dossier" id="dossier">
+        <summary><b>📓 Dossiê do comandante</b> <span class="tag ask" id="dossier-badge" hidden></span></summary>
+        <p class="muted">O que a tripulação aprendeu sobre você. Só as crenças <b>aceitas</b> entram no contexto de todos.</p>
+        <div id="belief-list" class="list"></div>
+        <form id="belief-form" class="row">
+          <input name="text" maxlength="300" placeholder="Acrescentar algo sobre você (ex.: trabalho com FastAPI)">
+          <button class="btn small">Adicionar</button>
+        </form>
+      </details>
       <div class="card preset">
         <div class="grow">
           <b>Tripulação pronta</b>
@@ -96,6 +106,39 @@
     </div>
 
     <!-- ESTEIRAS -->
+    <div class="tab-body" data-body="missions">
+      <div id="report-latest"></div>
+      <form id="mission-form" class="card form" autocomplete="off">
+        <h3>Nova missão</h3>
+        <label>Título <input name="title" maxlength="120" required placeholder="ex.: Lançar a loja K2e na Shopee"></label>
+        <label>Objetivo <textarea name="goal" rows="2" maxlength="2000" placeholder="O que é “pronto”? Critérios, prazo, restrições…"></textarea></label>
+        <label>Etapas (uma por linha, opcional — o Capitão divide se ficar vazio) <textarea name="steps" rows="3"></textarea></label>
+        <div class="actions"><button class="btn primary">Criar e entregar ao Capitão</button></div>
+      </form>
+      <div id="mission-list" class="list"></div>
+      <div class="card form" id="night-card">
+        <h3>🌙 Turno da noite</h3>
+        <p class="muted">Enquanto você dorme, o Capitão é acordado a cada intervalo para avançar as missões ativas, só com tripulantes de confiança ≥ 40. Terminal nunca roda à noite. De manhã, sai o relatório.</p>
+        <label class="check"><input type="checkbox" name="enabled"> Ligado</label>
+        <div class="row2">
+          <label>Começa <input name="start" type="time" value="23:00"></label>
+          <label>Termina <input name="end" type="time" value="07:00"></label>
+        </div>
+        <div class="row2">
+          <label>Acordar a cada (horas) <input name="interval_h" type="number" min="1" max="12" value="2"></label>
+          <label>Máximo de rodadas <input name="max_runs" type="number" min="1" max="24" value="6"></label>
+        </div>
+        <div class="muted" id="night-status"></div>
+        <div class="actions">
+          <button type="button" class="btn primary" id="night-save">Salvar</button>
+          <button type="button" class="btn" id="night-run">Rodar uma rodada agora</button>
+          <button type="button" class="btn ghost" id="night-report">Gerar relatório agora</button>
+        </div>
+      </div>
+      <h4>Relatórios anteriores</h4>
+      <div id="report-list" class="list"></div>
+    </div>
+
     <div class="tab-body" data-body="belts">
       <p class="muted">Uma esteira leva o resultado de um tripulante ao próximo. <b>Automática</b>: todo resultado final segue sozinho. <b>Manual</b>: o tripulante decide quando passar trabalho.</p>
       <form id="belt-form" class="card form">

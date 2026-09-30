@@ -10,6 +10,7 @@ const { createAgent } = require('./agent.js');
 const { makeShellTool } = require('./tools/shell.js');
 const { costOf } = require('./cost.js');
 const crew = require('./crew.js');
+const { missionTools, NIGHT_MIN_TRUST } = require('./missions.js');
 
 const MAX_HISTORY = 80;     // mensagens guardadas por agente
 const MAX_CHAIN = 5;        // saltos máximos numa cadeia de esteiras (evita ciclo infinito)
@@ -56,8 +57,10 @@ function makeStation(deps) {
         const to = targets.find(t => t.name.toLowerCase() === String(args.to).trim().toLowerCase() || t.id === args.to);
         if (!to) throw new Error('sem esteira para "' + args.to + '". Destinos: ' + (targets.map(t => t.name).join(', ') || 'nenhum'));
         const depth = (ctx.meta && ctx.meta.depth) || 0;
+        const night = !!(ctx.meta && ctx.meta.night);
         if (depth + 1 > MAX_CHAIN) throw new Error('cadeia de esteiras longa demais (máx. ' + MAX_CHAIN + ')');
-        enqueue(to.id, 'Tarefa passada por ' + agent.name + ':\n\n' + args.task, 'handoff', { from: agent.id, depth: depth + 1 });
+        if (night && to.trust != null && to.trust < NIGHT_MIN_TRUST) throw new Error(to.name + ' ainda não tem confiança para o turno da noite (' + to.trust + '/100, precisa de ' + NIGHT_MIN_TRUST + ')');
+        enqueue(to.id, 'Tarefa passada por ' + agent.name + ':\n\n' + args.task, 'handoff', { from: agent.id, depth: depth + 1, night });
         bus.emit({ type: 'conveyor', from: agent.id, to: to.id, kind: 'handoff' });
         return 'Tarefa enviada para ' + to.name + '.';
       }
@@ -104,10 +107,12 @@ function makeStation(deps) {
     const workspace = workspaceOf(a.id);
     const extraTools = [passWorkTool(a)];
     if (a.captain) extraTools.push(recruitTool(a));
+    for (const t of missionTools({ db, bus, agent: a, onMissionDone: deps.onMissionDone })) extraTools.push(t);
+    for (const t of (deps.growthTools ? deps.growthTools(a) : [])) extraTools.push(t);
     if (a.shell && deps.shellAvailable) extraTools.push(makeShellTool({ workspaceFor: () => workspace, image: config.shellImage, network: config.shellNetwork, runner: deps.shellRunner }));
     if (deps.mcp) for (const t of deps.mcp.toolsFor(a.mcp || [])) extraTools.push(t);
     const rt = createAgent(config, {
-      profile: { id: a.id, name: a.name, role: a.role, instructions: a.instructions, provider: a.provider, model: a.model },
+      profile: { id: a.id, name: a.name, role: a.role, instructions: a.instructions, provider: a.provider, model: a.model, captain: a.captain, extraContext: deps.extraContext ? deps.extraContext(a) : '' },
       workspace, sharedDir: sharedDir(), consent: deps.consent, checkpoints: deps.checkpoints, extraTools,
       history: db.getHistory(a.id), log, retries: deps.retries,
       provider: deps.providerFor ? deps.providerFor(a) : undefined
@@ -153,6 +158,9 @@ function makeStation(deps) {
     const surface = job.source === 'chat' ? 'interactive' : 'autonomous';
     let lastModel = { provider: '', model: '' };
     let usageSoFar = { input: 0, output: 0 };
+    let toolsOk = 0, recruited = false;
+    const night = !!(job.meta && job.meta.night);
+    const grow = (status) => { if (deps.onRunEnd) { try { deps.onRunEnd(a, { status, toolsOk, recruited, night, source: job.source }); } catch (err) { log('crescimento: ' + err.message); } } };
     try {
       const rt = runtime(agentId);
       const spentBefore = db.spentUsd(agentId);
@@ -169,6 +177,7 @@ function makeStation(deps) {
         },
         onEvent: (ev) => {
           if (ev.type === 'model') lastModel = { provider: ev.provider, model: ev.model };
+          if (ev.type === 'tool_result' && ev.ok) { toolsOk++; if (ev.name === 'recruit') recruited = true; }
           bus.emit({ type: 'agent_event', agentId, runId: job.runId, event: ev });
         }
       });
@@ -178,11 +187,13 @@ function makeStation(deps) {
       db.saveHistory(agentId, hist);
       if (hist.length !== rt.messages.length - 1) rt.messages.splice(1, rt.messages.length - 1, ...hist);
       bus.emit({ type: 'run_end', agentId, runId: job.runId, status: 'done', output: res.text, usage: res.usage, cost_usd: cost.usd, cost_known: cost.known });
+      grow('done');
       forward(a, res.text, job);
     } catch (e) {
       const status = e.name === 'AbortError' ? 'cancelled' : 'error';
       db.finishRun(job.runId, { status, error: e.message, tokens_in: usageSoFar.input, tokens_out: usageSoFar.output, provider: lastModel.provider, model: lastModel.model });
       bus.emit({ type: 'run_end', agentId, runId: job.runId, status, error: e.message });
+      if (status === 'error') grow('error');
     } finally {
       active.delete(agentId);
       running--;
@@ -198,7 +209,7 @@ function makeStation(deps) {
       if (!c.auto) continue;
       if (depth + 1 > MAX_CHAIN) { bus.emit({ type: 'warning', message: 'esteira parada: cadeia com mais de ' + MAX_CHAIN + ' saltos' }); return; }
       try {
-        enqueue(c.to_agent, 'Resultado recebido de ' + agent.name + ' pela esteira' + (c.note ? ' (' + c.note + ')' : '') + ':\n\n' + output, 'conveyor', { from: agent.id, depth: depth + 1 });
+        enqueue(c.to_agent, 'Resultado recebido de ' + agent.name + ' pela esteira' + (c.note ? ' (' + c.note + ')' : '') + ':\n\n' + output, 'conveyor', { from: agent.id, depth: depth + 1, night: !!(job.meta && job.meta.night) });
         bus.emit({ type: 'conveyor', from: agent.id, to: c.to_agent, kind: 'auto' });
       } catch (e) { bus.emit({ type: 'warning', message: 'esteira: ' + e.message }); }
     }

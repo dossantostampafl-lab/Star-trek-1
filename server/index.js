@@ -18,6 +18,8 @@ const { makeAuth } = require('./auth.js');
 const crew = require('./crew.js');
 const { makeJail } = require('./tools/fs.js');
 const mcpCatalog = require('./mcp-catalog.js');
+const missionsMod = require('./missions.js');
+const { makeGrowth } = require('./growth.js');
 
 const WEB = path.join(ROOT, 'web');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -77,7 +79,10 @@ async function start(overrides) {
   const shellAvailable = overrides.shellAvailable != null ? overrides.shellAvailable : await dockerAvailable();
   let station = null;
   const mcp = makeMcpManager({ log, onChange: () => { if (station) station.invalidate(); bus.emit({ type: 'mcp_changed' }); } });
-  station = makeStation({ config, db, bus, consent, checkpoints, shellAvailable, shellRunner: overrides.shellRunner, log, retries: overrides.retries, providerFor: overrides.providerFor, mcp });
+  const growth = makeGrowth({ db, bus, invalidate: () => station && station.invalidate() });
+  station = makeStation({ config, db, bus, consent, checkpoints, shellAvailable, shellRunner: overrides.shellRunner, log, retries: overrides.retries, providerFor: overrides.providerFor, mcp,
+    onRunEnd: growth.onRunEnd, onMissionDone: growth.onMissionDone, growthTools: (a) => [growth.beliefTool(a)], extraContext: growth.extraContext });
+  const night = missionsMod.makeNightShift({ db, station, bus, log, tickMs: overrides.nightTickMs, now: overrides.now });
   const scheduler = makeScheduler({
     list: () => db.listSchedules(),
     update: (id, patch) => db.updateSchedule(id, patch),
@@ -164,6 +169,8 @@ async function start(overrides) {
       totals: db.totals(),
       mcp: { configured: db.listMcp().map(x => ({ id: x.id, name: x.name, transport: x.transport, command: x.command, url: x.url, enabled: x.enabled })), live: mcp.status() },
       grants: db.listGrants(),
+      growth: growth.summary(),
+      pendingBeliefs: db.listBeliefs().filter(b => b.status === 'proposta').length,
       shellAvailable,
       authEnabled: auth.enabled,
       provider: { name: config.provider.name, model: config.provider.model, fallback: config.fallback ? config.fallback.name : null }
@@ -284,6 +291,79 @@ async function start(overrides) {
     }
 
     if (p === '/api/runs' && m === 'GET') return sendJson(res, 200, db.listRuns(url.searchParams.get('agent'), Math.min(200, Number(url.searchParams.get('limit')) || 50)));
+
+    // ---- missões
+    if (seg[0] === 'missions') {
+      if (seg.length === 1 && m === 'GET') return sendJson(res, 200, db.listMissions());
+      if (seg.length === 1 && m === 'POST') {
+        const b = await readBody(req);
+        const title = String(b.title || '').trim();
+        if (!title) throw httpErr(400, 'dê um título à missão');
+        const steps = (Array.isArray(b.steps) ? b.steps : String(b.steps || '').split('\n')).map(x => String(x).trim()).filter(Boolean);
+        const mission = db.createMission({ title, goal: String(b.goal || ''), steps });
+        bus.emit({ type: 'missions_changed' });
+        let runId = null;
+        const cap = db.listAgents().find(a => a.captain);
+        if (b.dispatch !== false && cap) {
+          runId = station.enqueue(cap.id, 'Nova missão do comandante: M' + mission.num + ' — ' + title + (b.goal ? '\nObjetivo: ' + b.goal : '') +
+            (steps.length ? '\nEtapas sugeridas:\n' + steps.map((x, i) => (i + 1) + '. ' + x).join('\n') : '\nAinda sem etapas: divida em etapas com mission_update (add_step).') +
+            '\nComece agora: delegue a primeira etapa e registre o progresso com mission_update.', 'chat');
+        }
+        return sendJson(res, 201, { mission, runId });
+      }
+      const mi = db.getMission(seg[1]);
+      if (!mi) throw httpErr(404, 'missão não encontrada');
+      if (seg.length === 2 && m === 'PATCH') {
+        const b = await readBody(req);
+        if (b.status) { if (!missionsMod.STATUS.includes(b.status)) throw httpErr(400, 'status inválido'); mi.status = b.status; }
+        if (b.title) mi.title = String(b.title).slice(0, 120);
+        if (b.goal != null) mi.goal = String(b.goal).slice(0, 2000);
+        if (b.toggleStep != null) { const st = mi.steps.find(x => x.id === Number(b.toggleStep)); if (st) { st.done = !st.done; st.agent = 'Comandante'; } }
+        if (b.addStep) mi.steps.push({ id: mi.steps.reduce((x, st) => Math.max(x, st.id), 0) + 1, text: String(b.addStep).slice(0, 300), done: false, agent: '', note: '' });
+        mi.log.push({ at: new Date().toISOString(), agent: 'Comandante', text: [b.status && 'status: ' + b.status, b.toggleStep != null && 'etapa ' + b.toggleStep, b.addStep && '+ etapa: ' + b.addStep].filter(Boolean).join(' · ') || 'editou' });
+        const saved = db.saveMission(mi);
+        bus.emit({ type: 'missions_changed' });
+        return sendJson(res, 200, saved);
+      }
+      if (seg.length === 2 && m === 'DELETE') { db.deleteMission(mi.id); bus.emit({ type: 'missions_changed' }); return sendJson(res, 200, { ok: true }); }
+    }
+
+    // ---- turno da noite e relatórios
+    if (p === '/api/night' && m === 'GET') return sendJson(res, 200, missionsMod.nightSettings(db));
+    if (p === '/api/night' && m === 'PUT') {
+      try { return sendJson(res, 200, missionsMod.saveNightSettings(db, await readBody(req))); }
+      catch (e) { throw httpErr(400, e.message); }
+    }
+    if (p === '/api/night/run' && m === 'POST') {
+      const r = night.fire('manual');
+      if (!r.ok) throw httpErr(400, r.reason);
+      return sendJson(res, 202, r);
+    }
+    if (p === '/api/night/report' && m === 'POST') {
+      const since = db.getSetting('night_active_since', '') || null;
+      return sendJson(res, 201, night.morningReport(since));
+    }
+    if (p === '/api/reports' && m === 'GET') return sendJson(res, 200, db.listReports(20));
+
+    // ---- crescimento: dossiê, avaliações
+    if (p === '/api/beliefs' && m === 'GET') return sendJson(res, 200, db.listBeliefs());
+    if (p === '/api/beliefs' && m === 'POST') {
+      const b = await readBody(req);
+      const id = db.addBelief({ text: b.text, status: 'aceita' });
+      station.invalidate(); bus.emit({ type: 'state_changed' });
+      return sendJson(res, 201, { id });
+    }
+    if (seg[0] === 'beliefs' && seg.length === 2 && m === 'PATCH') {
+      const b = await readBody(req);
+      if (!['aceita', 'rejeitada', 'proposta'].includes(b.status)) throw httpErr(400, 'status inválido');
+      try { growth.setBelief(seg[1], b.status); } catch (e) { throw httpErr(404, e.message); }
+      return sendJson(res, 200, { ok: true });
+    }
+    if (seg[0] === 'beliefs' && seg.length === 2 && m === 'DELETE') { db.deleteBelief(seg[1]); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
+    if (seg[0] === 'runs' && seg[2] === 'rate' && m === 'POST') {
+      const b = await readBody(req);
+      try { return sendJson(res, 200, growth.rate(seg[1], Number(b.rating) || 0)); } catch (e) { throw httpErr(404, e.message); }
+    }
 
     // ---- tripulação pronta
     if (p === '/api/crew/preset' && m === 'POST') {
@@ -477,10 +557,11 @@ async function start(overrides) {
 
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(overrides.port != null ? overrides.port : config.port, overrides.host || config.host, resolve); });
   scheduler.start();
+  night.start();
   const url = 'http://127.0.0.1:' + server.address().port;
   return {
     url, token, db, station, mcp, bus,
-    async close() { scheduler.stop(); await mcp.closeAll(); for (const a of db.listAgents()) station.cancel(a.id); await new Promise(r => server.close(r)); server.closeAllConnections && server.closeAllConnections(); if (!overrides.db) db.close(); }
+    async close() { scheduler.stop(); night.stop(); await mcp.closeAll(); for (const a of db.listAgents()) station.cancel(a.id); await new Promise(r => server.close(r)); server.closeAllConnections && server.closeAllConnections(); if (!overrides.db) db.close(); }
   };
 }
 

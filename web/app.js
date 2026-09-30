@@ -89,10 +89,15 @@
     if (!S.agents.length) box.append(h('div', { class: 'empty', text: 'Nenhum tripulante ainda. Recrute o primeiro abaixo — ele já usa o FreeLLMAPI, sem custo.' }));
     for (const a of S.agents) {
       const st = S.status[a.id] || {};
+      const g = (S.growth || []).find(x => x.id === a.id);
       box.append(h('div', { class: 'item' + (a.id === selected ? ' sel' : '') },
         h('span', { class: 'swatch', style: 'background:' + a.color + ';color:' + a.color }),
         h('div', { class: 'grow' },
-          h('div', { class: 'title' }, a.captain ? h('span', { class: 'badge-cap', text: '★', title: 'Capitão' }) : null, a.name),
+          h('div', { class: 'title' }, a.captain ? h('span', { class: 'badge-cap', text: '★', title: 'Capitão' }) : null, a.name,
+            g ? h('span', { class: 'lv', title: g.xp + ' XP · próximo nível em ' + g.next + ' XP', text: 'Nv ' + g.level }) : null),
+          g ? h('div', { class: 'sub' },
+            'confiança ', h('span', { class: 'meter', title: g.trust + '/100 — ' + g.autonomy }, h('i', { style: 'width:' + g.trust + '%;background:' + (g.trust >= 70 ? 'var(--green)' : g.trust >= 40 ? 'var(--cyan)' : 'var(--red)') })),
+            ' ' + g.autonomy + ' ', h('span', { class: 'trophies', title: g.trophies.map(t => t.title).join(' · '), text: g.trophies.map(t => t.icon).join('') })) : null,
           h('div', { class: 'sub', text: [a.role || 'sem função definida', (a.provider || 'padrão') + (a.model ? '/' + a.model : ''), a.shell ? 'terminal' : '', (a.mcp || []).length ? (a.mcp.length + ' conector(es)') : '', a.budget_usd > 0 ? usd(a.spent_usd) + ' de ' + usd(a.budget_usd) : (a.spent_usd > 0 ? usd(a.spent_usd) : '')].filter(Boolean).join(' · ') })),
         h('span', { class: 'state' + (st.busy ? ' busy' : ''), text: st.busy ? 'trabalhando' : st.queued ? st.queued + ' na fila' : 'livre' }),
         h('button', { class: 'btn small', text: 'Falar', onclick: () => openChat(a.id) }),
@@ -180,6 +185,7 @@
     if (name === 'log') loadRuns();
     if (name === 'files') loadFiles();
     if (name === 'mcp') loadCatalog();
+    if (name === 'missions') loadMissions();
   }
   $$('.tabs button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
@@ -359,6 +365,103 @@
     }
   }
 
+  // ---------- avaliações (👍/👎 mexem na confiança e no XP) ----------
+  function rateButtons(runId) {
+    if (!runId) return '';
+    const box = h('span', { class: 'rate' });
+    const mk = (v, t, label) => h('button', { type: 'button', text: t, title: label, onclick: safe(async (e) => {
+      const was = e.currentTarget.classList.contains('on');
+      await api('POST', '/api/runs/' + runId + '/rate', { rating: was ? 0 : v });
+      [...box.children].forEach(b => b.classList.remove('on'));
+      if (!was) e.currentTarget.classList.add('on');
+    }) });
+    box.append(mk(1, '👍', 'Boa resposta (+confiança)'), mk(-1, '👎', 'Resposta ruim (−confiança)'));
+    return box;
+  }
+
+  // ---------- dossiê do comandante ----------
+  const loadBeliefs = safe(async () => {
+    const list = await api('GET', '/api/beliefs');
+    const box = $('#belief-list');
+    box.replaceChildren();
+    const pend = list.filter(b => b.status === 'proposta');
+    const badge = $('#dossier-badge');
+    badge.hidden = !pend.length; badge.textContent = pend.length + ' nova(s)';
+    if (!list.length) box.append(h('div', { class: 'empty', text: 'Nada ainda. Os tripulantes propõem o que percebem sobre você.' }));
+    for (const b of list.filter(b => b.status !== 'rejeitada')) {
+      const by = agentName(b.agent_id);
+      box.append(h('div', { class: 'item' },
+        h('div', { class: 'grow' }, h('div', { text: b.text }), h('div', { class: 'sub', text: (b.status === 'proposta' ? 'proposta' : 'aceita') + (b.agent_id ? ' · por ' + by : ' · por você') })),
+        b.status === 'proposta' ? h('button', { class: 'btn small primary', text: 'Aceitar', onclick: safe(async () => { await api('PATCH', '/api/beliefs/' + b.id, { status: 'aceita' }); loadBeliefs(); }) }) : null,
+        b.status === 'proposta' ? h('button', { class: 'btn small ghost', text: 'Recusar', onclick: safe(async () => { await api('PATCH', '/api/beliefs/' + b.id, { status: 'rejeitada' }); loadBeliefs(); }) }) : null,
+        b.status === 'aceita' ? h('button', { class: 'btn small danger', text: '✕', title: 'Esquecer', onclick: safe(async () => { await api('DELETE', '/api/beliefs/' + b.id); loadBeliefs(); }) }) : null));
+    }
+  });
+  $('#belief-form').addEventListener('submit', safe(async (e) => {
+    e.preventDefault();
+    const t = e.target.text.value.trim();
+    if (!t) return;
+    await api('POST', '/api/beliefs', { text: t });
+    e.target.text.value = '';
+    loadBeliefs();
+  }));
+
+  // ---------- missões, turno da noite, relatórios ----------
+  const STATUS_LABEL = { ativa: 'ativa', pausada: 'pausada', concluida: 'concluída', cancelada: 'cancelada' };
+  const loadMissions = safe(async () => {
+    const [ms, nightCfg, reports] = await Promise.all([api('GET', '/api/missions'), api('GET', '/api/night'), api('GET', '/api/reports')]);
+    const box = $('#mission-list');
+    box.replaceChildren();
+    if (!ms.length) box.append(h('div', { class: 'empty', text: 'Nenhuma missão. Crie uma acima — o Capitão divide em etapas e a tripulação avança, inclusive à noite.' }));
+    const order = { ativa: 0, pausada: 1, concluida: 2, cancelada: 3 };
+    for (const m of ms.slice().sort((a, b) => (order[a.status] - order[b.status]) || b.num - a.num)) {
+      const done = m.steps.filter(x => x.done).length;
+      const pct = m.steps.length ? Math.round(100 * done / m.steps.length) : 0;
+      const steps = h('div', { class: 'steps' }, ...m.steps.map(st => h('label', null,
+        h('input', { type: 'checkbox', checked: st.done, onchange: safe(async () => { await api('PATCH', '/api/missions/' + m.id, { toggleStep: st.id }); loadMissions(); }) }),
+        h('span', null, st.id + '. ' + st.text, st.agent ? h('span', { class: 'note', text: ' · ' + st.agent }) : null, st.note ? h('div', { class: 'note', text: st.note }) : null))));
+      const addInput = h('input', { placeholder: '+ etapa', style: 'flex:1;background:var(--hull);border:1px solid var(--line);border-radius:4px;padding:4px 6px;color:var(--ink)' });
+      const statusBtn = (st, label) => h('button', { class: 'btn small ghost', text: label, onclick: safe(async () => { await api('PATCH', '/api/missions/' + m.id, { status: st }); loadMissions(); }) });
+      box.append(h('div', { class: 'item mission' + (m.status === 'ativa' ? '' : ' muted') },
+        h('div', { class: 'row' }, h('div', { class: 'title grow', text: 'M' + m.num + ' — ' + m.title }), h('span', { class: 'state ' + (m.status === 'concluida' ? 'done' : m.status === 'ativa' ? 'busy' : ''), text: STATUS_LABEL[m.status] })),
+        m.goal ? h('div', { class: 'sub', text: m.goal }) : null,
+        h('div', { class: 'progress', title: done + '/' + m.steps.length }, h('i', { style: 'width:' + pct + '%' })),
+        steps,
+        h('div', { class: 'row' }, addInput,
+          h('button', { class: 'btn small', text: 'Adicionar', onclick: safe(async () => { if (!addInput.value.trim()) return; await api('PATCH', '/api/missions/' + m.id, { addStep: addInput.value.trim() }); loadMissions(); }) }),
+          m.status === 'ativa' ? statusBtn('pausada', 'Pausar') : statusBtn('ativa', 'Reativar'),
+          m.status !== 'concluida' ? statusBtn('concluida', 'Concluir') : null,
+          h('button', { class: 'btn small danger', text: '✕', title: 'Apagar', onclick: safe(async () => { if (confirm('Apagar M' + m.num + '?')) { await api('DELETE', '/api/missions/' + m.id); loadMissions(); } }) }))));
+    }
+    // turno da noite
+    const nc = $('#night-card');
+    nc.querySelector('[name=enabled]').checked = nightCfg.enabled;
+    for (const k of ['start', 'end', 'interval_h', 'max_runs']) nc.querySelector('[name=' + k + ']').value = nightCfg[k];
+    $('#night-status').textContent = nightCfg.active_since ? '🌙 Turno em andamento desde ' + when(nightCfg.active_since) + ' · ' + nightCfg.runs + ' rodada(s)' :
+      nightCfg.enabled ? 'Ligado: das ' + nightCfg.start + ' às ' + nightCfg.end + ', a cada ' + nightCfg.interval_h + 'h.' : 'Desligado.';
+    // relatórios
+    const latest = reports[0];
+    const lbox = $('#report-latest');
+    lbox.replaceChildren();
+    if (latest && Date.now() - new Date(latest.created_at) < 20 * 3600e3) lbox.append(h('details', { class: 'card report-card', open: true }, h('summary', null, h('b', { text: '☀ ' + latest.title })), h('div', { class: 'report', text: latest.body })));
+    const rl = $('#report-list');
+    rl.replaceChildren();
+    if (!reports.length) rl.append(h('div', { class: 'empty', text: 'Nenhum relatório ainda.' }));
+    for (const r of reports) rl.append(h('details', { class: 'card' }, h('summary', { text: r.title + ' · ' + when(r.created_at) }), h('div', { class: 'report', text: r.body })));
+  });
+  $('#mission-form').addEventListener('submit', safe(async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const r = await api('POST', '/api/missions', { title: f.title.value.trim(), goal: f.goal.value.trim(), steps: f.steps.value });
+    f.reset();
+    toast('M' + r.mission.num + ' criada' + (r.runId ? ' e entregue ao Capitão.' : '.'));
+    loadMissions();
+  }));
+  const nightBody = () => { const nc = $('#night-card'); return { enabled: nc.querySelector('[name=enabled]').checked, start: nc.querySelector('[name=start]').value, end: nc.querySelector('[name=end]').value, interval_h: Number(nc.querySelector('[name=interval_h]').value), max_runs: Number(nc.querySelector('[name=max_runs]').value) }; };
+  $('#night-save').addEventListener('click', safe(async () => { await api('PUT', '/api/night', nightBody()); toast('Turno da noite salvo.'); loadMissions(); }));
+  $('#night-run').addEventListener('click', safe(async () => { await api('POST', '/api/night/run'); toast('Rodada do turno enviada ao Capitão.'); }));
+  $('#night-report').addEventListener('click', safe(async () => { await api('POST', '/api/night/report'); toast('Relatório gerado (também salvo em relatorios/ na pasta compartilhada).'); loadMissions(); }));
+
   // ---------- arquivos ----------
   const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
   function renderFilesScope() {
@@ -516,6 +619,12 @@
   function onEvent(ev) {
     switch (ev.type) {
       case 'state_changed': case 'mcp_changed': case 'run_queued': refreshSoon(); break;
+      case 'missions_changed': if ($('.tab-body[data-body=missions]').classList.contains('on')) loadMissions(); break;
+      case 'report': toast('☀ ' + ev.title + ' pronto — aba Missões.'); if ($('.tab-body[data-body=missions]').classList.contains('on')) loadMissions(); break;
+      case 'night_fired': Station.setActivity(ev.agentId, '🌙 turno da noite', 20000); break;
+      case 'trophy': toast(ev.icon + ' ' + ev.name + ': ' + ev.title); refreshSoon(); break;
+      case 'level_up': toast('⬆ ' + ev.name + ' subiu para o nível ' + ev.level + '!'); refreshSoon(); break;
+      case 'belief_proposed': toast('📓 ' + agentName(ev.agentId) + ' anotou algo sobre você — veja o Dossiê.'); loadBeliefs(); break;
       case 'files_changed': if ($('.tab-body[data-body=files]').classList.contains('on')) loadFiles(); break;
       case 'history_reset': if (ev.agentId === selected) loadHistory(); break;
       case 'run_start':
@@ -553,7 +662,7 @@
             if (!lv || !lv.text) { if (ev.output) addMsg('assistant', ev.output); }
             const meta = h('span', { class: 'meta', text: (ev.usage ? (ev.usage.input + ev.usage.output) + ' tokens' : '') + (ev.cost_known && ev.cost_usd ? ' · ' + usd(ev.cost_usd) : ev.cost_usd === 0 ? ' · grátis' : '') });
             const last = $$('.msg.assistant', log()).pop();
-            if (last) last.append(meta);
+            if (last) { last.append(meta); meta.append(rateButtons(ev.runId)); }
             if (tts.checked && ev.output) Voice.speak(ev.output);
           } else if (ev.status === 'error') addMsg('err', 'Erro: ' + ev.error);
           else if (ev.status === 'cancelled') addMsg('system', '(cancelado)');
@@ -611,6 +720,7 @@
   // ---------- início ----------
   Station.init($('#station'), { onSelect: openChat });
   resetAgentForm();
+  loadBeliefs();
   const initialTab = location.hash.slice(1);
   if ($('.tabs button[data-tab="' + initialTab + '"]')) switchTab(initialTab);
   connect(0);

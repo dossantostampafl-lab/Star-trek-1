@@ -46,6 +46,21 @@ CREATE TABLE IF NOT EXISTS schedules (
 CREATE TABLE IF NOT EXISTS grants (
   agent_id TEXT NOT NULL, key TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(agent_id, key)
 );
+CREATE TABLE IF NOT EXISTS missions (
+  id TEXT PRIMARY KEY, num INTEGER NOT NULL, title TEXT NOT NULL, goal TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'ativa',
+  owner TEXT DEFAULT '', steps TEXT DEFAULT '[]', log TEXT DEFAULT '[]',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS reports (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS beliefs (
+  id TEXT PRIMARY KEY, text TEXT NOT NULL, agent_id TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'proposta', created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS trophies (
+  agent_id TEXT NOT NULL, key TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(agent_id, key)
+);
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, transport TEXT NOT NULL,
   command TEXT DEFAULT '', args TEXT DEFAULT '[]', env TEXT DEFAULT '{}',
@@ -63,14 +78,20 @@ function openDb(file) {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
   // migração: coluna "captain" (versões antigas do banco não têm)
-  if (!db.prepare("PRAGMA table_info(agents)").all().some(c => c.name === 'captain')) db.exec('ALTER TABLE agents ADD COLUMN captain INTEGER DEFAULT 0');
+  const addCol = (table, col, def) => { if (!db.prepare('PRAGMA table_info(' + table + ')').all().some(c => c.name === col)) db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def); };
+  addCol('agents', 'captain', 'INTEGER DEFAULT 0');
+  addCol('agents', 'xp', 'INTEGER DEFAULT 0');
+  addCol('agents', 'trust', 'INTEGER DEFAULT 50');
+  addCol('agents', 'props', "TEXT DEFAULT '[]'");
+  addCol('runs', 'rating', 'INTEGER DEFAULT 0');
 
   const q = (sql) => db.prepare(sql);
   const json = (s, d) => { try { return JSON.parse(s); } catch (_) { return d; } };
   const plain = (r) => r ? Object.assign({}, r) : null;
-  const agentRow = (r) => r && Object.assign(plain(r), { shell: !!r.shell, captain: !!r.captain, mcp: json(r.mcp, []) });
+  const agentRow = (r) => r && Object.assign(plain(r), { shell: !!r.shell, captain: !!r.captain, mcp: json(r.mcp, []), props: json(r.props, []) });
 
-  const AGENT_FIELDS = ['name', 'role', 'instructions', 'provider', 'model', 'color', 'room_x', 'room_y', 'budget_usd', 'shell', 'captain', 'mcp'];
+  const missionRow = (r) => r && Object.assign(plain(r), { steps: json(r.steps, []), log: json(r.log, []) });
+  const AGENT_FIELDS = ['name', 'role', 'instructions', 'provider', 'model', 'color', 'room_x', 'room_y', 'budget_usd', 'shell', 'captain', 'mcp', 'xp', 'trust', 'props'];
 
   const api = {
     raw: db,
@@ -90,13 +111,13 @@ function openDb(file) {
       const sets = [], vals = [];
       for (const k of AGENT_FIELDS) if (patch[k] !== undefined) {
         sets.push(k + ' = ?');
-        vals.push((k === 'shell' || k === 'captain') ? (patch[k] ? 1 : 0) : k === 'mcp' ? JSON.stringify(patch[k] || []) : k === 'name' ? String(patch[k]).slice(0, 40) : patch[k]);
+        vals.push((k === 'shell' || k === 'captain') ? (patch[k] ? 1 : 0) : (k === 'mcp' || k === 'props') ? JSON.stringify(patch[k] || []) : k === 'name' ? String(patch[k]).slice(0, 40) : patch[k]);
       }
       if (sets.length) q('UPDATE agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...vals, id);
       return api.getAgent(id);
     },
     deleteAgent(id) {
-      for (const t of ['messages', 'runs', 'schedules', 'grants']) q('DELETE FROM ' + t + ' WHERE agent_id = ?').run(id);
+      for (const t of ['messages', 'runs', 'schedules', 'grants', 'trophies']) q('DELETE FROM ' + t + ' WHERE agent_id = ?').run(id);
       q('DELETE FROM conveyors WHERE from_agent = ? OR to_agent = ?').run(id, id);
       q('DELETE FROM agents WHERE id = ?').run(id);
     },
@@ -175,6 +196,54 @@ function openDb(file) {
       return api.listMcp().find(x => x.id === id);
     },
     deleteMcp: (id) => q('DELETE FROM mcp_servers WHERE id = ?').run(id),
+
+    // ---- missões
+    listMissions: () => q('SELECT * FROM missions ORDER BY num').all().map(missionRow),
+    getMission: (id) => missionRow(q('SELECT * FROM missions WHERE id = ? OR num = ?').get(id, Number(String(id).replace(/^m/i, '')) || -1)),
+    createMission(m) {
+      const id = newId('mis');
+      const num = ((q('SELECT MAX(num) AS n FROM missions').get() || {}).n || 0) + 1;
+      const steps = (m.steps || []).map((t, i) => ({ id: i + 1, text: String(t).slice(0, 300), done: false, agent: '', note: '' })).slice(0, 30);
+      q('INSERT INTO missions (id, num, title, goal, status, owner, steps, log, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, num, String(m.title).slice(0, 120), String(m.goal || '').slice(0, 2000), 'ativa', m.owner || '', JSON.stringify(steps), '[]', now(), now());
+      return api.getMission(id);
+    },
+    saveMission(m) {
+      q('UPDATE missions SET title = ?, goal = ?, status = ?, owner = ?, steps = ?, log = ?, updated_at = ?, completed_at = ? WHERE id = ?')
+        .run(m.title, m.goal, m.status, m.owner || '', JSON.stringify(m.steps || []), JSON.stringify((m.log || []).slice(-200)), now(), m.status === 'concluida' ? (m.completed_at || now()) : null, m.id);
+      return api.getMission(m.id);
+    },
+    deleteMission: (id) => q('DELETE FROM missions WHERE id = ?').run(id),
+
+    // ---- configurações (chave/valor)
+    getSetting: (k, d) => { const r = q('SELECT value FROM settings WHERE key = ?').get(k); return r ? r.value : d; },
+    setSetting: (k, v) => q('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, v == null ? null : String(v)),
+
+    // ---- relatórios
+    addReport(r) { const id = newId('rep'); q('INSERT INTO reports (id, kind, title, body, created_at) VALUES (?, ?, ?, ?, ?)').run(id, r.kind, r.title, r.body, now()); return id; },
+    listReports: (limit) => q('SELECT * FROM reports ORDER BY created_at DESC LIMIT ?').all(limit || 20).map(plain),
+    runsSince: (iso) => q('SELECT * FROM runs WHERE started_at >= ? ORDER BY started_at').all(iso).map(plain),
+
+    // ---- crenças sobre o comandante (dossiê)
+    listBeliefs: () => q('SELECT * FROM beliefs ORDER BY created_at DESC').all().map(plain),
+    addBelief(b) {
+      const text = String(b.text || '').trim().slice(0, 300);
+      if (!text) throw new Error('crença vazia');
+      const dup = q("SELECT id FROM beliefs WHERE lower(text) = lower(?) AND status != 'rejeitada'").get(text);
+      if (dup) return null;
+      const id = newId('bel');
+      q('INSERT INTO beliefs (id, text, agent_id, status, created_at) VALUES (?, ?, ?, ?, ?)').run(id, text, b.agent_id || '', b.status || 'proposta', now());
+      return id;
+    },
+    setBelief: (id, status) => q('UPDATE beliefs SET status = ? WHERE id = ?').run(status, id),
+    deleteBelief: (id) => q('DELETE FROM beliefs WHERE id = ?').run(id),
+
+    // ---- troféus e avaliações
+    addTrophy: (agentId, key) => q('INSERT OR IGNORE INTO trophies (agent_id, key, at) VALUES (?, ?, ?)').run(agentId, key, now()).changes > 0,
+    listTrophies: () => q('SELECT * FROM trophies ORDER BY at').all().map(plain),
+    getRun: (id) => plain(q('SELECT * FROM runs WHERE id = ?').get(id)),
+    rateRun: (id, rating) => q('UPDATE runs SET rating = ? WHERE id = ?').run(rating, id),
+    countRuns: (agentId, status) => (q('SELECT COUNT(*) AS n FROM runs WHERE agent_id = ? AND status = ?').get(agentId, status) || {}).n || 0,
 
     close: () => db.close()
   };

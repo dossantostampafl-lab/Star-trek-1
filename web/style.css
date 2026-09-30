@@ -171,3 +171,23 @@ h4 { margin: 8px 0 0; font-size: 12px; letter-spacing: .1em; text-transform: upp
 .tag.safe { color: var(--green); border-color: rgba(125,255,168,.35); }
 .tag.ask { color: var(--amber); border-color: rgba(255,179,71,.35); }
 a.link { color: var(--cyan); font-size: 12px; }
+
+.progress { height: 6px; background: var(--hull); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.progress > i { display: block; height: 100%; background: var(--green); }
+.mission { flex-direction: column; align-items: stretch; gap: 6px; }
+.mission .steps { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.mission .steps label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.mission .steps .note { color: var(--ink-dim); font-size: 12px; }
+.mission .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.report { white-space: pre-wrap; font-size: 13px; max-height: 50vh; overflow: auto; }
+.report-card { border-color: var(--amber); }
+.lv { font-size: 11px; padding: 0 6px; border-radius: 999px; border: 1px solid rgba(255,224,102,.4); color: var(--focus); margin-left: 6px; }
+.trophies { font-size: 13px; letter-spacing: 1px; }
+.meter { display: inline-block; width: 60px; height: 5px; background: var(--hull); border: 1px solid var(--line); border-radius: 999px; vertical-align: middle; overflow: hidden; }
+.meter > i { display: block; height: 100%; }
+.rate { display: inline-flex; gap: 4px; margin-left: 8px; }
+.rate button { background: none; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; cursor: pointer; font-size: 12px; }
+.rate button.on { border-color: var(--amber); }
+.dossier summary { cursor: pointer; }
+.dossier[open] { display: flex; flex-direction: column; gap: 8px; }
+.dossier .row input { flex: 1; background: var(--hull); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--ink); }
