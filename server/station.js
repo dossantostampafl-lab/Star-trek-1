@@ -60,7 +60,7 @@ function makeStation(deps) {
         const night = !!(ctx.meta && ctx.meta.night);
         if (depth + 1 > MAX_CHAIN) throw new Error('cadeia de esteiras longa demais (máx. ' + MAX_CHAIN + ')');
         if (night && to.trust != null && to.trust < NIGHT_MIN_TRUST) throw new Error(to.name + ' ainda não tem confiança para o turno da noite (' + to.trust + '/100, precisa de ' + NIGHT_MIN_TRUST + ')');
-        enqueue(to.id, 'Tarefa passada por ' + agent.name + ':\n\n' + args.task, 'handoff', { from: agent.id, depth: depth + 1, night });
+        enqueue(to.id, 'Tarefa passada por ' + agent.name + ':\n\n' + args.task, 'handoff', { from: agent.id, depth: depth + 1, night, origin: ctx.meta && ctx.meta.origin });
         bus.emit({ type: 'conveyor', from: agent.id, to: to.id, kind: 'handoff' });
         return 'Tarefa enviada para ' + to.name + '.';
       }
@@ -155,19 +155,20 @@ function makeStation(deps) {
     running++;
     db.raw.prepare("UPDATE runs SET status = 'running' WHERE id = ?").run(job.runId);
     bus.emit({ type: 'run_start', agentId, runId: job.runId, source: job.source, input: job.text.slice(0, 2000) });
-    const surface = job.source === 'chat' ? 'interactive' : 'autonomous';
+    // chat no painel ou mensagem do comandante pelo Telegram/Discord = interativo; o resto roda sozinho
+    const surface = (job.source === 'chat' || job.source === 'channel') ? 'interactive' : 'autonomous';
     let lastModel = { provider: '', model: '' };
     let usageSoFar = { input: 0, output: 0 };
-    let toolsOk = 0, recruited = false;
+    let toolsOk = 0, recruited = false, lastOutput = '', lastError = '';
     const night = !!(job.meta && job.meta.night);
-    const grow = (status) => { if (deps.onRunEnd) { try { deps.onRunEnd(a, { status, toolsOk, recruited, night, source: job.source }); } catch (err) { log('crescimento: ' + err.message); } } };
+    const grow = (status) => { if (deps.onRunEnd) { try { deps.onRunEnd(a, { status, toolsOk, recruited, night, source: job.source, runId: job.runId, meta: job.meta || {}, output: lastOutput, error: lastError }); } catch (err) { log('crescimento: ' + err.message); } } };
     try {
       const rt = runtime(agentId);
       const spentBefore = db.spentUsd(agentId);
       const res = await rt.send(job.text, {
         signal: controller.signal,
         surface,
-        meta: job.meta,
+        meta: Object.assign({}, job.meta, { runId: job.runId, source: job.source }),
         beforeStep: (usage) => {
           usageSoFar = usage;
           if (a.budget_usd > 0) {
@@ -186,14 +187,16 @@ function makeStation(deps) {
       const hist = trimHistory(rt.messages.slice(1));
       db.saveHistory(agentId, hist);
       if (hist.length !== rt.messages.length - 1) rt.messages.splice(1, rt.messages.length - 1, ...hist);
-      bus.emit({ type: 'run_end', agentId, runId: job.runId, status: 'done', output: res.text, usage: res.usage, cost_usd: cost.usd, cost_known: cost.known });
+      lastOutput = res.text || '';
+      bus.emit({ type: 'run_end', agentId, runId: job.runId, status: 'done', output: res.text, usage: res.usage, cost_usd: cost.usd, cost_known: cost.known, source: job.source, meta: job.meta || {} });
       grow('done');
       forward(a, res.text, job);
     } catch (e) {
       const status = e.name === 'AbortError' ? 'cancelled' : 'error';
       db.finishRun(job.runId, { status, error: e.message, tokens_in: usageSoFar.input, tokens_out: usageSoFar.output, provider: lastModel.provider, model: lastModel.model });
-      bus.emit({ type: 'run_end', agentId, runId: job.runId, status, error: e.message });
-      if (status === 'error') grow('error');
+      lastError = e.message;
+      bus.emit({ type: 'run_end', agentId, runId: job.runId, status, error: e.message, source: job.source, meta: job.meta || {} });
+      grow(status);
     } finally {
       active.delete(agentId);
       running--;
@@ -204,12 +207,13 @@ function makeStation(deps) {
   // Esteiras automáticas: o resultado final segue para os próximos agentes.
   function forward(agent, output, job) {
     if (!output || !output.trim()) return;
+    if (job.meta && job.meta.jobId && !job.meta.watch) return;   // rodadas de "repetir até terminar" não descem a esteira
     const depth = (job.meta && job.meta.depth) || 0;
     for (const c of db.conveyorsFrom(agent.id)) {
       if (!c.auto) continue;
       if (depth + 1 > MAX_CHAIN) { bus.emit({ type: 'warning', message: 'esteira parada: cadeia com mais de ' + MAX_CHAIN + ' saltos' }); return; }
       try {
-        enqueue(c.to_agent, 'Resultado recebido de ' + agent.name + ' pela esteira' + (c.note ? ' (' + c.note + ')' : '') + ':\n\n' + output, 'conveyor', { from: agent.id, depth: depth + 1, night: !!(job.meta && job.meta.night) });
+        enqueue(c.to_agent, 'Resultado recebido de ' + agent.name + ' pela esteira' + (c.note ? ' (' + c.note + ')' : '') + ':\n\n' + output, 'conveyor', { from: agent.id, depth: depth + 1, night: !!(job.meta && job.meta.night), origin: job.meta && job.meta.origin });
         bus.emit({ type: 'conveyor', from: agent.id, to: c.to_agent, kind: 'auto' });
       } catch (e) { bus.emit({ type: 'warning', message: 'esteira: ' + e.message }); }
     }

@@ -11,6 +11,7 @@ services:
     image: star-trek-1:local
     container_name: star-trek-1
     restart: unless-stopped
+    shm_size: 512mb   # memória compartilhada para o navegador dos tripulantes
     env_file: ../../.env
     environment:
       HOST: 0.0.0.0

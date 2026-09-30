@@ -188,10 +188,11 @@ function makeNightShift(deps) {
     }
     const pendingOnYou = ms.filter(m => m.status === 'ativa').flatMap(m => m.steps.filter(s => !s.done && /comandante/i.test(s.note || '')).map(s => 'M' + m.num + ' etapa ' + s.id + ': ' + s.note));
     if (pendingOnYou.length) { out.push('', '## Esperando você'); for (const p of pendingOnYou) out.push('- ' + p); }
+    if (deps.extraReport) { try { for (const line of deps.extraReport(since)) out.push(line); } catch (e) { log('relatório extra: ' + e.message); } }
     const body = out.join('\n');
     const id = db.addReport({ kind: 'manha', title, body });
     try { fs.writeFileSync(path.join(reportsDir(), 'manha-' + d.toISOString().slice(0, 10) + '.md'), body); } catch (e) { log('relatório: ' + e.message); }
-    bus.emit({ type: 'report', id, title });
+    bus.emit({ type: 'report', id, title, body });
     return { id, title, body };
   }
 

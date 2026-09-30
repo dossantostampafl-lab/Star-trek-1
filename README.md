@@ -58,6 +58,54 @@ use o botão **Embarcar** (aba Tripulação) — ele só cria o que falta.
 
 Fale só com o Capitão: o pedido percorre a esteira sozinho e o resumo final volta para ele.
 
+## Telegram e Discord (aba Canais)
+
+Converse com a tripulação pelo celular. Suas mensagens vão para o Capitão (ou para quem você escolher com
+`/falar Nome`), e a resposta volta no chat — inclusive o resultado final que percorre as esteiras.
+A estação também avisa lá: perguntas dos tripulantes (com botões), pedidos de permissão, entregas (com o arquivo e
+botões **Aceitar/Refazer**), relatório da manhã e vigias de site. Áudios são transcritos; arquivos vão para `entrada/`.
+
+- **Telegram:** @BotFather → `/newbot` → cole o token → **Gerar código** → mande o código ao bot.
+- **Discord:** crie o app/bot no portal, ligue *Message Content Intent*, cole o token, convide o bot para um servidor
+  seu e mande o código por mensagem direta.
+
+Só o dono pareado é atendido. Comandos: `/status`, `/tripulacao`, `/falar`, `/para`, `/parar`, `/perguntas`,
+`/entregas`, `/missoes`, `/relatorio`.
+
+## Perguntar antes de adivinhar
+
+Quando um pedido é ambíguo, o tripulante usa `ask_commander`: UMA pergunta com 2–4 opções, que aparece no topo do
+painel e no Telegram/Discord. Ele espera até 20 min (`QUESTION_WAIT_MIN`); sem resposta, segue com a opção padrão e
+avisa na entrega. No turno da noite não espera — a pergunta vai para o relatório da manhã.
+
+## Caixa de entregas (aba Entregas)
+
+Com `deliver`, o tripulante registra o arquivo pronto. Cada entrega passa por uma **conferência automática** — existe,
+não está vazio, o formato bate com a extensão (PDF/PNG/ZIP/JSON), sem marcadores esquecidos (TODO, lorem ipsum,
+[inserir…]), CSV com colunas consistentes, links quando promete fontes — e recebe o veredito ✓ / ⚠ / ✗. Você baixa,
+aceita ou pede para **refazer** (o motivo e os pontos da conferência voltam para o tripulante). Se o tripulante diz ter
+salvo um arquivo que não existe, a estação avisa.
+
+## Navegador dos tripulantes
+
+`browser` abre páginas de verdade (com JavaScript), lê o texto e numera links/botões/campos, e tira fotos.
+`browser_act` clica e preenche formulários — pede permissão (dá para liberar "sempre"). Todo o tráfego passa por um
+filtro que bloqueia a rede interna (containers, 127.0.0.1, 10.x, 192.168.x…). Vem instalado na imagem Docker
+(Chromium); fora dela, defina `CHROME_PATH`. Desligue com `BROWSER=0`.
+
+## Voz
+
+- **Fala:** voz neural grátis do Edge em português (Antônio, Francisca, Thalita), com a do navegador como reserva.
+- **Ditado em qualquer navegador** (Safari/iPad/Firefox) e áudios do Telegram/Discord: transcrição Whisper pela
+  **Groq** (grátis — crie a chave em console.groq.com/keys e cole na aba Canais → Voz). Aceita qualquer endpoint
+  compatível com OpenAI.
+
+## Tarefas contínuas (aba Agenda)
+
+- **🔁 Repetir até terminar:** uma rodada a cada N minutos, até o tripulante responder `CONCLUÍDO` (ou bater o limite).
+- **👁 Vigiar site:** baixa a página a cada N minutos (opcional: só o trecho com uma palavra) e avisa quando muda; pode
+  mandar uma tarefa para um tripulante com as linhas novas.
+
 ## Visual e editor da estação
 
 Cada tripulante tem um personagem animado (anda pela sala, vai até a mesa e digita quando está trabalhando)

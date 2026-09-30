@@ -27,7 +27,7 @@ const fetchUrl = {
     const signal = ctx.signal || AbortSignal.timeout(20000);
     let res;
     for (let hop = 0; ; hop++) {             // segue redirecionamentos checando cada destino
-      if (isPrivateHost(u.hostname)) throw new Error('endereços locais/privados não são permitidos');
+      await assertPublicHost(u.hostname);
       res = await fetch(u, { redirect: 'manual', signal, headers: { 'user-agent': 'StarTrek1-Agent/0.1' } });
       const loc = res.headers.get('location');
       if (res.status < 300 || res.status >= 400 || !loc) break;
@@ -91,6 +91,24 @@ function isPrivateHost(h) {
     /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h);
 }
 
+/* Confere se o destino é público DE VERDADE: resolve o DNS e recusa IPs privados/locais e nomes sem ponto
+   (ex.: nomes de containers como "star-trek-freellmapi"). Evita que um agente alcance a rede interna. */
+const dns = require('node:dns').promises;
+const net = require('node:net');
+async function assertPublicHost(hostname) {
+  const h = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (!h || isPrivateHost(h)) throw new Error('endereços locais/privados não são permitidos');
+  if (!net.isIP(h) && !h.includes('.')) throw new Error('endereço interno não permitido: ' + h);
+  if (process.env.ST1_ALLOW_PRIVATE_FETCH === '1') return;   // só para testes locais
+  let addrs = [];
+  if (net.isIP(h)) addrs = [{ address: h }];
+  else { try { addrs = await dns.lookup(h, { all: true }); } catch (e) { throw new Error('não achei o endereço ' + h); } }
+  for (const a of addrs) {
+    const ip = a.address.replace(/^::ffff:/, '');
+    if (isPrivateHost(ip) || /^(0\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip) || ip === '::') throw new Error('o endereço ' + h + ' aponta para a rede interna — bloqueado');
+  }
+}
+
 function htmlToText(html) {
   return html
     .replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, ' ')
@@ -100,4 +118,4 @@ function htmlToText(html) {
     .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
 }
 
-module.exports = { getTime, fetchUrl, webSearch, parseDuckResults, isPrivateHost, htmlToText };
+module.exports = { getTime, fetchUrl, webSearch, parseDuckResults, isPrivateHost, assertPublicHost, htmlToText };

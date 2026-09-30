@@ -46,6 +46,9 @@
   const safe = (fn) => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message, true); } };
 
   // ---------- estado ----------
+  const vPrefs = { natural: true, serverStt: false };
+  try { const p = JSON.parse(localStorage.getItem('st1-voice') || '{}'); Object.assign(vPrefs, p); } catch (_) { /* sem storage */ }
+
   const S = { agents: [], conveyors: [], schedules: [], status: {}, totals: {}, mcp: { configured: [], live: [] }, grants: [], shellAvailable: false, provider: {} };
   let selected = null;
   let editing = null;
@@ -189,6 +192,9 @@
     if (name === 'mcp') loadCatalog();
     if (name === 'missions') loadMissions();
     if (name === 'recipes') loadRecipes();
+    if (name === 'outbox') loadOutbox();
+    if (name === 'sched') loadJobs();
+    if (name === 'channels') { renderChannels(); loadVoice(); }
     if (name === 'notes') loadNotes();
     if (name === 'skills') loadSkills();
   }
@@ -271,13 +277,16 @@
 
   // voz
   const mic = $('#mic');
-  if (!Voice.canListen) { mic.disabled = true; mic.title = 'Este navegador não reconhece voz (use Chrome ou Edge)'; }
+  Voice.configure({ token: TOKEN, natural: vPrefs.natural, serverStt: vPrefs.serverStt });
+  loadVoice();
+  if (!Voice.canListen) { mic.disabled = true; mic.title = 'Sem microfone neste navegador'; }
   mic.addEventListener('click', () => {
     Voice.listen((text, final) => {
       input.value = text; autoGrow();
       if (final && text) $('#chat-form').requestSubmit();
     }, (state, err) => {
       mic.classList.toggle('listening', state === 'listening');
+      mic.textContent = state === 'working' ? '⏳' : '🎙';
       if (state === 'error') toast('Microfone: ' + err, true);
     });
   });
@@ -409,6 +418,7 @@
     await api('POST', '/api/beliefs', { text: t });
     e.target.text.value = '';
     loadBeliefs();
+  loadQuestions();
   }));
 
   // ---------- missões, turno da noite, relatórios ----------
@@ -630,6 +640,13 @@
       case 'trophy': toast(ev.icon + ' ' + ev.name + ': ' + ev.title); refreshSoon(); break;
       case 'level_up': toast('⬆ ' + ev.name + ' subiu para o nível ' + ev.level + '!'); refreshSoon(); break;
       case 'belief_proposed': toast('📓 ' + agentName(ev.agentId) + ' anotou algo sobre você — veja o Dossiê.'); loadBeliefs(); break;
+      case 'question': toast('❓ ' + (ev.agentName || agentName(ev.agentId)) + ' tem uma pergunta para você.'); loadQuestions(); break;
+      case 'question_answered': case 'question_expired': loadQuestions(); break;
+      case 'deliverable': toast('📦 ' + ev.agentName + ' entregou "' + ev.title + '" (' + ev.verdict + ').', ev.verdict === 'falhou'); refreshSoon(); if (tabOn('outbox')) loadOutbox(); break;
+      case 'deliverables_changed': refreshSoon(); if (tabOn('outbox')) loadOutbox(); break;
+      case 'jobs_changed': if (tabOn('sched')) loadJobs(); break;
+      case 'job_update': toast(ev.message, ev.status === 'falhou'); if (tabOn('sched')) loadJobs(); break;
+      case 'channel_paired': toast('✅ ' + ev.channel + ' pareado' + (ev.name ? ' com ' + ev.name : '') + '.'); refreshSoon(); break;
       case 'skill_proposed': toast('🧩 ' + agentName(ev.agentId) + ' propôs a habilidade "' + ev.name + '" — aprove na aba Habilidades.'); refreshSoon(); if (tabOn('skills')) loadSkills(); break;
       case 'notes_changed': if (tabOn('notes')) loadNotesSoon(); break;
       case 'files_changed': if ($('.tab-body[data-body=files]').classList.contains('on')) loadFiles(); break;
@@ -738,6 +755,9 @@
       ...S.agents.map(a => h('option', { value: a.id, text: a.name + ' (' + ((S.noteCounts || {})[a.id] || 0) + ')' }))]);
     keep($('#note-owner'), [h('option', { value: '*', text: '👥 Tripulação (todos veem)' }), ...S.agents.map(a => h('option', { value: a.id, text: a.name }))]);
     keep($('#skills-agent'), S.agents.map(a => h('option', { value: a.id, text: 'Habilidades de ' + a.name })));
+    for (const sel of $$('.agent-select-opt')) keep(sel, [h('option', { value: '', text: '(ninguém — só me avisar)' }), ...S.agents.map(a => h('option', { value: a.id, text: a.name }))]);
+    const ob = $('#outbox-badge'); ob.hidden = !S.deliverablesNew; ob.textContent = S.deliverablesNew || '';
+    if (tabOn('channels')) renderChannels();
     for (const sel of $$('.agent-select-cap')) keep(sel, [h('option', { value: 'captain', text: 'Capitão (ele delega)' }), ...S.agents.filter(a => !a.captain).map(a => h('option', { value: a.id, text: a.name }))]);
     const badge = $('#skills-badge');
     badge.hidden = !S.skillsPending; badge.textContent = S.skillsPending || '';
@@ -961,6 +981,170 @@
     if (f.slug.value) await api('PUT', '/api/skills/' + f.slug.value, body);
     else { const s = await api('POST', '/api/skills', body); toast('Habilidade "' + s.name + '" criada — ligue-a nos tripulantes.'); }
     resetSkillForm(); $('#skill-new').open = false; loadSkills();
+  }));
+
+  // ---------- perguntas dos tripulantes ----------
+  async function loadQuestions() {
+    const qs = (await api('GET', '/api/questions').catch(() => [])).filter(q => q.status === 'aberta');
+    const bar = $('#questions-bar');
+    bar.replaceChildren(...qs.slice(0, 4).map(q => {
+      const free = h('input', { placeholder: 'Outra resposta…', maxlength: 2000, 'aria-label': 'Outra resposta' });
+      const answer = safe(async (text) => { await api('POST', '/api/questions/' + q.id + '/answer', { answer: text }); toast('Resposta enviada para ' + agentName(q.agent_id) + '.'); loadQuestions(); });
+      return h('div', { class: 'question' },
+        h('div', { class: 'q-who', text: '❓ ' + agentName(q.agent_id) + ' pergunta' + (q.night ? ' (turno da noite)' : '') }),
+        h('div', { text: q.question }),
+        q.context ? h('div', { class: 'muted', text: q.context }) : null,
+        q.options.length ? h('div', { class: 'q-opts' }, ...q.options.map(o => h('button', { type: 'button', class: 'btn small' + (o === q.default_option ? ' primary' : ''), text: o, onclick: () => answer(o) }))) : null,
+        h('form', { class: 'q-free', onsubmit: (e) => { e.preventDefault(); if (free.value.trim()) answer(free.value.trim()); } }, free, h('button', { class: 'btn small', text: 'Enviar' }),
+          h('button', { type: 'button', class: 'btn small ghost', text: 'Descartar', onclick: safe(async () => { await api('POST', '/api/questions/' + q.id + '/dismiss'); loadQuestions(); }) })),
+        q.default_option ? h('div', { class: 'muted', text: 'Sem resposta, segue com: ' + q.default_option }) : null);
+    }));
+    if (qs.length > 4) bar.append(h('div', { class: 'muted', text: '+ ' + (qs.length - 4) + ' pergunta(s)' }));
+  }
+
+  // ---------- caixa de entregas ----------
+  let outboxFilter = 'nova';
+  $$('#outbox-filter button').forEach(b => b.addEventListener('click', () => { outboxFilter = b.dataset.f; $$('#outbox-filter button').forEach(x => x.classList.toggle('on', x === b)); loadOutbox(); }));
+  async function downloadVia(url, name) {
+    const res = await fetch(url, { headers: { 'x-st1-token': TOKEN } });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || 'HTTP ' + res.status); }
+    const href = URL.createObjectURL(await res.blob());
+    const a = h('a', { href, download: name }); document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 3000);
+  }
+  async function loadOutbox() {
+    const all = await api('GET', '/api/deliverables').catch(e => { toast(e.message, true); return []; });
+    const list = all.filter(d => outboxFilter === 'todas' || d.status === outboxFilter);
+    const box = $('#outbox-list');
+    box.replaceChildren();
+    if (!list.length) box.append(h('div', { class: 'empty', text: outboxFilter === 'nova' ? 'Nenhuma entrega nova. Quando um tripulante terminar um arquivo, ele aparece aqui (e no Telegram, se ligado).' : 'Nada aqui.' }));
+    for (const d of list) {
+      const bad = d.checks.filter(c => c.level !== 'ok');
+      const name = d.rel.split('/').pop();
+      box.append(h('div', { class: 'item deliv' },
+        h('div', { class: 'title' }, h('span', { class: 'verdict ' + d.verdict, text: d.verdict === 'ok' ? '✓ conferida' : d.verdict === 'aviso' ? '⚠ aviso' : '✗ falhou' }), ' ', d.title),
+        h('div', { class: 'sub', text: agentName(d.agent_id) + ' · ' + (d.scope === 'shared' ? 'compartilhada/' : 'pasta dele/') + d.rel + ' · ' + (d.size ? Math.max(1, Math.round(d.size / 1024)) + ' KB' : '—') + ' · ' + when(d.updated_at) + (d.status !== 'nova' ? ' · ' + d.status : '') }),
+        d.summary ? h('div', { class: 'note-body', text: d.summary }) : null,
+        bad.length ? h('ul', { class: 'checks' }, ...bad.map(c => h('li', { class: 'bad', text: c.name + (c.detail ? ' — ' + c.detail : '') }))) : null,
+        d.feedback ? h('div', { class: 'sub', text: 'Pedido: ' + d.feedback }) : null,
+        h('div', { class: 'acts' },
+          h('button', { class: 'btn small primary', text: '⬇ Baixar', onclick: safe(() => downloadVia('/api/deliverables/' + d.id + '/download', name)) }),
+          d.status !== 'aceita' ? h('button', { class: 'btn small', text: '✅ Aceitar', onclick: safe(async () => { await api('POST', '/api/deliverables/' + d.id + '/accept'); loadOutbox(); refreshSoon(); }) }) : null,
+          h('button', { class: 'btn small ghost', text: '🔁 Refazer', onclick: safe(async () => {
+            const fb = prompt('O que precisa mudar? (deixe vazio para só refazer)', '');
+            if (fb === null) return;
+            await api('POST', '/api/deliverables/' + d.id + '/redo', { feedback: fb }); toast('Pedido enviado para ' + agentName(d.agent_id) + '.'); loadOutbox(); refreshSoon();
+          }) }),
+          h('button', { class: 'btn small ghost', text: 'Conferir de novo', onclick: safe(async () => { await api('POST', '/api/deliverables/' + d.id + '/recheck'); loadOutbox(); }) }),
+          h('button', { class: 'btn small danger', text: 'Tirar da lista', onclick: safe(async () => { await api('DELETE', '/api/deliverables/' + d.id); loadOutbox(); refreshSoon(); }) }))));
+    }
+  }
+
+  // ---------- tarefas contínuas ----------
+  const JOB_STATE = { ativo: '🟢 ativa', pausado: '⏸ pausada', concluido: '✅ concluída', limite: '⏸ chegou ao limite', falhou: '⚠ parou' };
+  async function loadJobs() {
+    const js = await api('GET', '/api/jobs').catch(e => { toast(e.message, true); return []; });
+    const box = $('#jobs-list');
+    box.replaceChildren();
+    for (const j of js) {
+      const info = j.kind === 'loop'
+        ? agentName(j.agent_id) + ' · rodada ' + j.runs + '/' + j.max_runs + ' · a cada ' + j.interval_min + ' min' + (j.last_run_id ? ' · rodando agora' : '')
+        : j.url + (j.keyword ? ' · trecho "' + j.keyword + '"' : '') + ' · a cada ' + j.interval_min + ' min' + (j.last_change ? ' · mudou em ' + when(j.last_change) : j.last_check ? ' · última leitura ' + when(j.last_check) : '');
+      box.append(h('div', { class: 'item' },
+        h('div', { class: 'grow' },
+          h('div', { class: 'title', text: (j.kind === 'loop' ? '🔁 ' : '👁 ') + j.title }),
+          h('div', { class: 'sub', text: info }),
+          h('div', { class: 'sub job-state', text: (JOB_STATE[j.status] || j.status) + (j.last_error ? ' — ' + j.last_error : '') })),
+        h('button', { class: 'btn small', text: j.kind === 'loop' ? 'Rodar' : 'Verificar', onclick: safe(async () => { await api('POST', '/api/jobs/' + j.id + '/run'); toast('Feito.'); loadJobs(); }) }),
+        h('button', { class: 'btn small ghost', text: j.status === 'ativo' ? 'Pausar' : 'Retomar', onclick: safe(async () => { await api('PATCH', '/api/jobs/' + j.id, { status: j.status === 'ativo' ? 'pausado' : 'ativo' }); loadJobs(); }) }),
+        h('button', { class: 'btn small danger', text: '✕', title: 'Apagar', onclick: safe(async () => { if (!confirm('Apagar "' + j.title + '"?')) return; await api('DELETE', '/api/jobs/' + j.id); loadJobs(); }) })));
+    }
+  }
+  $('#loop-form').addEventListener('submit', safe(async (e) => {
+    e.preventDefault(); const f = e.target;
+    await api('POST', '/api/jobs', { kind: 'loop', agent_id: f.agent_id.value, prompt: f.prompt.value, interval_min: Number(f.interval_min.value), max_runs: Number(f.max_runs.value) });
+    f.prompt.value = ''; toast('🔁 Tarefa contínua criada — a primeira rodada sai no próximo minuto.'); loadJobs();
+  }));
+  $('#watch-form').addEventListener('submit', safe(async (e) => {
+    e.preventDefault(); const f = e.target;
+    await api('POST', '/api/jobs', { kind: 'watch', url: f.url.value.trim(), keyword: f.keyword.value, interval_min: Number(f.interval_min.value), agent_id: f.agent_id.value || undefined, prompt: f.prompt.value });
+    f.url.value = ''; f.keyword.value = ''; f.prompt.value = ''; toast('👁 Vigia criada — a primeira leitura sai no próximo minuto.'); loadJobs();
+  }));
+
+  // ---------- canais ----------
+  const NOTIFY_LABEL = { perguntas: 'perguntas', permissoes: 'permissões', entregas: 'entregas', relatorios: 'relatório da manhã', vigias: 'vigias e tarefas contínuas' };
+  function renderChannels() {
+    for (const ch of ['telegram', 'discord']) {
+      const card = $('#ch-' + ch);
+      const st = (S.channels || {})[ch] || {};
+      const status = $('.ch-status', card);
+      status.replaceChildren(...[
+        h('div', null, 'Situação: ', h('b', { class: st.connected ? 'on' : 'off', text: st.connected ? 'conectado' : st.configured ? 'desconectado' : 'sem token' }),
+          st.bot ? ' · bot ' + st.bot : '', st.paired ? ' · pareado ✓' : st.configured ? ' · ainda não pareado' : '', st.paired && st.target ? ' · conversa com ' + st.target : ''),
+        st.error ? h('div', { class: 'bad', text: '⚠ ' + st.error }) : null,
+        st.pairCode ? h('div', null, 'Mande este código para o bot (vale 15 min): ', h('span', { class: 'pair-code', text: st.pairCode })) : null,
+        ch === 'discord' && st.id ? h('div', null, h('a', { href: 'https://discord.com/oauth2/authorize?client_id=' + st.id + '&scope=bot&permissions=0', target: '_blank', rel: 'noopener', text: '➕ Convidar o bot para um servidor seu' }), ' (necessário para mandar mensagem direta)') : null].filter(Boolean));
+      const nb = $('.ch-notify', card);
+      nb.replaceChildren(h('span', { class: 'muted', text: 'Avisar:' }), ...Object.entries(st.notify || {}).map(([k, on]) => {
+        const cb = h('input', { type: 'checkbox', checked: on });
+        cb.addEventListener('change', safe(async () => { await api('PUT', '/api/channels/' + ch, { notify: { [k]: cb.checked } }); }));
+        return h('label', { class: 'check' }, cb, ' ' + (NOTIFY_LABEL[k] || k));
+      }));
+    }
+  }
+  for (const ch of ['telegram', 'discord']) {
+    const card = $('#ch-' + ch);
+    $$('button[data-act]', card).forEach(b => b.addEventListener('click', safe(async () => {
+      const act = b.dataset.act;
+      if (act === 'save') {
+        const t = $('input[name=token]', card).value.trim();
+        if (!t && !confirm('Token vazio desliga o ' + ch + '. Continuar?')) return;
+        b.disabled = true;
+        try { await api('PUT', '/api/channels/' + ch, { token: t }); $('input[name=token]', card).value = ''; toast(t ? ch + ' conectado. Agora toque em Gerar código.' : ch + ' desligado.'); }
+        finally { b.disabled = false; await refresh(); }
+      }
+      if (act === 'pair') { const r = await api('POST', '/api/channels/' + ch + '/pair'); toast('Código: ' + r.code); await refresh(); }
+      if (act === 'test') { await api('POST', '/api/channels/' + ch + '/test'); toast('Mensagem de teste enviada.'); }
+      if (act === 'unpair') { if (!confirm('Desparear o ' + ch + '? O bot para de responder até parear de novo.')) return; await api('POST', '/api/channels/' + ch + '/unpair'); await refresh(); }
+    })));
+  }
+
+  // ---------- voz ----------
+  let voiceInfo = null;
+  async function loadVoice() {
+    voiceInfo = await api('GET', '/api/voice').catch(() => null);
+    if (!voiceInfo) return;
+    Voice.configure({ token: TOKEN, natural: vPrefs.natural, serverStt: vPrefs.serverStt, sttReady: voiceInfo.stt.configured });
+    const card = $('#voice-card');
+    const sel = $('select[name=voice]', card);
+    sel.replaceChildren(...Object.entries(voiceInfo.voices).map(([k, v]) => h('option', { value: k, text: v })));
+    sel.value = voiceInfo.voice;
+    $('#voice-natural').checked = vPrefs.natural;
+    $('#voice-server-stt').checked = vPrefs.serverStt;
+    $('input[name=stt_base_url]', card).value = voiceInfo.stt.base; $('input[name=stt_model]', card).value = voiceInfo.stt.model;
+    $('#voice-status').textContent = 'Ditado pelo servidor: ' + (voiceInfo.stt.configured ? 'pronto ✓' : 'sem chave') + ' · Este navegador: ' + (Voice.hasBrowserStt ? 'tem ditado próprio' : Voice.canRecord ? 'usa o ditado do servidor' : 'sem microfone');
+    updateMic();
+  }
+  function updateMic() {
+    const m = $('#mic');
+    m.disabled = !Voice.canListen;
+    m.title = Voice.canListen ? 'Falar (toque de novo para parar)' : 'Sem microfone neste navegador';
+  }
+  $('#voice-save').addEventListener('click', safe(async () => {
+    const card = $('#voice-card');
+    vPrefs.natural = $('#voice-natural').checked; vPrefs.serverStt = $('#voice-server-stt').checked;
+    try { localStorage.setItem('st1-voice', JSON.stringify(vPrefs)); } catch (_) { /* ok */ }
+    const body = { voice: $('select[name=voice]', card).value, stt_base_url: $('input[name=stt_base_url]', card).value.trim(), stt_model: $('input[name=stt_model]', card).value.trim() };
+    const key = $('input[name=stt_api_key]', card).value.trim();
+    if (key) body.stt_api_key = key;
+    await api('PUT', '/api/voice', body);
+    $('input[name=stt_api_key]', card).value = '';
+    toast('Voz salva.'); loadVoice();
+  }));
+  $('#voice-test').addEventListener('click', safe(async () => {
+    Voice.configure({ natural: $('#voice-natural').checked });
+    const how = await Voice.speak('Olá, comandante. A tripulação está pronta.', $('#voice-card select[name=voice]').value);
+    if (how === 'navegador' && $('#voice-natural').checked) toast('A voz natural não respondeu agora — usei a do navegador.', true);
   }));
 
   // ---------- editor da estação ----------

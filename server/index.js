@@ -24,6 +24,14 @@ const decor = require('./decor.js');
 const { makeSkills } = require('./skills.js');
 const { makeNotebook } = require('./notebook.js');
 const { makeRecipes } = require('./recipes.js');
+const { makeQuestions } = require('./questions.js');
+const { makeDeliverables } = require('./deliverables.js');
+const { makeJobs } = require('./jobs.js');
+const { makeBrowser, browserTools } = require('./tools/browser.js');
+const voice = require('./voice.js');
+const { makeHub } = require('./channels/hub.js');
+const { makeTelegram } = require('./channels/telegram.js');
+const { makeDiscord } = require('./channels/discord.js');
 
 const WEB = path.join(ROOT, 'web');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -31,11 +39,15 @@ const COLORS = ['#5ec8ff', '#ffb347', '#7dffa8', '#ff6b9a', '#c49bff', '#ffe066'
 
 function makeBus() {
   const clients = new Set();
+  const listeners = new Set();   // ouvintes internos (canais Telegram/Discord, tarefas)
   return {
     emit(ev) {
-      const line = 'data: ' + JSON.stringify(Object.assign({ at: Date.now() }, ev)) + '\n\n';
+      const full = Object.assign({ at: Date.now() }, ev);
+      const line = 'data: ' + JSON.stringify(full) + '\n\n';
       for (const res of clients) { try { res.write(line); } catch (_) { clients.delete(res); } }
+      for (const fn of listeners) { try { fn(full); } catch (e) { console.error('  ouvinte: ' + e.message); } }
     },
+    on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     add(res) { clients.add(res); res.on('close', () => clients.delete(res)); },
     count: () => clients.size
   };
@@ -69,10 +81,11 @@ async function start(overrides) {
 
   // ---- permissões: pedidos vão para a interface; sem interface aberta = negado
   const pendingConsent = new Map();
+  let hub = null;
   const consent = makeConsentBroker({
     grants: db.grants,
     prompt: (req) => new Promise((resolve) => {
-      if (!bus.count()) return resolve('deny');
+      if (!bus.count() && !(hub && hub.canAsk())) return resolve('deny');
       const id = crypto.randomBytes(8).toString('hex');
       pendingConsent.set(id, { resolve, req });
       bus.emit({ type: 'consent_request', id, agentId: req.agentId, agentName: req.agentName, tool: req.tool, args: req.call.args, choices: req.choices });
@@ -86,13 +99,43 @@ async function start(overrides) {
   const mcp = makeMcpManager({ log, onChange: () => { if (station) station.invalidate(); bus.emit({ type: 'mcp_changed' }); } });
   const growth = makeGrowth({ db, bus, invalidate: () => station && station.invalidate() });
   const skills = makeSkills({ db, bus });
+  let deliverables = null, jobs = null;
+  const questions = makeQuestions({ db, bus, waitMs: overrides.questionWaitMs,
+    deliverLate: (q, ans) => { try { station.enqueue(q.agent_id, 'Resposta do comandante (chegou depois) à sua pergunta "' + q.question + '": ' + ans + '\nSe isso muda o que você já fez, ajuste e avise.', 'chat'); } catch (e) { log('pergunta: ' + e.message); } } });
+  const browser = overrides.browser !== undefined ? overrides.browser : (process.env.BROWSER === '0' ? null : makeBrowser());
   const notebook = makeNotebook({ db, bus, invalidate: (id) => station && station.invalidate(id) });
   const recipes = makeRecipes({ db });
   station = makeStation({ config, db, bus, consent, checkpoints, shellAvailable, shellRunner: overrides.shellRunner, log, retries: overrides.retries, providerFor: overrides.providerFor, mcp,
-    onRunEnd: growth.onRunEnd, onMissionDone: growth.onMissionDone,
-    growthTools: (a) => [growth.beliefTool(a), ...skills.tools(a), ...notebook.tools(a)],
-    extraContext: (a) => [growth.extraContext(a), skills.context(a), notebook.context(a)].filter(Boolean).join('\n\n') });
-  const night = missionsMod.makeNightShift({ db, station, bus, log, tickMs: overrides.nightTickMs, now: overrides.now });
+    onRunEnd: (a, info) => { growth.onRunEnd(a, info); try { deliverables.onRunEnd(a, info); jobs.onRunEnd(a, info); } catch (e) { log('fim de execução: ' + e.message); } },
+    onMissionDone: growth.onMissionDone,
+    growthTools: (a) => [growth.beliefTool(a), ...skills.tools(a), ...notebook.tools(a), questions.tool(a), deliverables.tool(a),
+      ...browserTools(browser, a, makeJail(station.workspaceOf(a.id)))],
+    extraContext: (a) => [growth.extraContext(a), skills.context(a), notebook.context(a), deliverables.context()].filter(Boolean).join('\n\n') });
+  deliverables = makeDeliverables({ db, bus, station });
+  jobs = makeJobs({ db, bus, station, log, tickMs: overrides.jobsTickMs, fetchPage: overrides.fetchPage });
+
+  // ---- canais (Telegram, Discord)
+  function resolveConsent(id, decision) {
+    const pc = pendingConsent.get(id);
+    if (!pc) return false;
+    pendingConsent.delete(id);
+    pc.resolve(pc.req.choices.includes(decision) ? decision : 'deny');
+    bus.emit({ type: 'consent_closed', id });
+    return true;
+  }
+  hub = makeHub({ db, bus, station, log, questions, deliverables, resolveConsent,
+    transcribe: overrides.transcribe || ((buf, mime) => voice.transcribe(db, buf, mime)) });
+  hub.register(makeTelegram(Object.assign({ db, log }, overrides.telegram || {})));
+  hub.register(makeDiscord(Object.assign({ db, log }, overrides.discord || {})));
+  const night = missionsMod.makeNightShift({ db, station, bus, log, tickMs: overrides.nightTickMs, now: overrides.now,
+    extraReport: (since) => {
+      const out = [];
+      const qs = questions.openForReport();
+      if (qs.length) { out.push('', '## Perguntas para você'); for (const q of qs) out.push('- ' + ((db.getAgent(q.agent_id) || {}).name || '?') + ': ' + q.question + (q.options.length ? ' (' + q.options.join(' / ') + ')' : '') + ' — seguiu com: ' + (q.default_option || 'palpite')); }
+      const ds = deliverables.list(50).filter(d => d.created_at >= since || d.updated_at >= since);
+      if (ds.length) { out.push('', '## Entregas'); for (const d of ds) out.push('- ' + (d.verdict === 'ok' ? '✅' : d.verdict === 'aviso' ? '⚠️' : '❌') + ' ' + d.title + ' — ' + ((db.getAgent(d.agent_id) || {}).name || '?') + ' (' + (d.scope === 'shared' ? 'shared/' : '') + d.rel + ')'); }
+      return out;
+    } });
   const scheduler = makeScheduler({
     list: () => db.listSchedules(),
     update: (id, patch) => db.updateSchedule(id, patch),
@@ -174,6 +217,10 @@ async function start(overrides) {
     return {
       agents: agents.map(a => Object.assign(a, { spent_usd: db.spentUsd(a.id), skills_on: skills.forAgent(a).map(x => x.slug) })),
       skillsPending: skills.pending(),
+      questionsOpen: questions.pending(),
+      deliverablesNew: deliverables.counts().novas,
+      browserAvailable: !!(browser && browser.available),
+      channels: hub.status(),
       noteCounts: notebook.counts(),
       conveyors: db.listConveyors(),
       schedules: db.listSchedules().map(s => Object.assign(s, { info: describe(s.cron) })),
@@ -302,7 +349,7 @@ async function start(overrides) {
         bus.emit({ type: 'state_changed' });
         return sendJson(res, 200, upd);
       }
-      if (seg.length === 2 && m === 'DELETE') { station.cancel(a.id); notebook.removeAgent(a.id); db.deleteAgent(a.id); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
+      if (seg.length === 2 && m === 'DELETE') { station.cancel(a.id); notebook.removeAgent(a.id); if (browser) browser.closeAgent(a.id); db.deleteAgent(a.id); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
       if (seg[2] === 'history' && m === 'GET') return sendJson(res, 200, visibleHistory(a.id));
       if (seg[2] === 'message' && m === 'POST') {
         const b = await readBody(req);
@@ -416,6 +463,98 @@ async function start(overrides) {
         return sendJson(res, 201, c);
       }
       if (seg.length === 2 && m === 'DELETE') { db.deleteConveyor(seg[1]); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
+    }
+
+    const wrap400 = (fn) => { try { return fn(); } catch (e) { throw e.status ? e : httpErr(400, e.message); } };
+
+    // ---- perguntas dos tripulantes
+    if (seg[0] === 'questions') {
+      if (seg.length === 1 && m === 'GET') return sendJson(res, 200, questions.list());
+      if (seg[2] === 'answer' && m === 'POST') { const b = await readBody(req); return sendJson(res, 200, wrap400(() => questions.answer(seg[1], b.answer, 'painel'))); }
+      if (seg[2] === 'dismiss' && m === 'POST') { wrap400(() => questions.dismiss(seg[1])); return sendJson(res, 200, { ok: true }); }
+      throw httpErr(404, 'rota não encontrada');
+    }
+
+    // ---- caixa de entregas
+    if (seg[0] === 'deliverables') {
+      if (seg.length === 1 && m === 'GET') return sendJson(res, 200, deliverables.list(200));
+      const d = deliverables.get(seg[1]);
+      if (!d) throw httpErr(404, 'entrega não encontrada');
+      if (seg[2] === 'accept' && m === 'POST') return sendJson(res, 200, deliverables.setStatus(d.id, 'aceita'));
+      if (seg[2] === 'redo' && m === 'POST') { const b = await readBody(req); return sendJson(res, 200, wrap400(() => deliverables.redo(d.id, b.feedback))); }
+      if (seg[2] === 'recheck' && m === 'POST') { const r = deliverables.recheck(d.id); bus.emit({ type: 'deliverables_changed' }); return sendJson(res, 200, r); }
+      if (seg[2] === 'download' && m === 'GET') {
+        let abs;
+        try { abs = deliverables.absOf(d); } catch (_) { throw httpErr(404, 'arquivo não encontrado'); }
+        if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw httpErr(404, 'arquivo não encontrado');
+        res.writeHead(200, { 'content-type': DL_MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
+          'content-disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(path.basename(abs)), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        return fs.createReadStream(abs).pipe(res);
+      }
+      if (seg.length === 2 && m === 'DELETE') { deliverables.remove(d.id); return sendJson(res, 200, { ok: true }); }
+      throw httpErr(404, 'rota não encontrada');
+    }
+
+    // ---- tarefas contínuas (repetir até terminar, vigiar site)
+    if (seg[0] === 'jobs') {
+      if (seg.length === 1 && m === 'GET') return sendJson(res, 200, jobs.list());
+      if (seg.length === 1 && m === 'POST') { const b = await readBody(req); return sendJson(res, 201, wrap400(() => jobs.create(b))); }
+      if (!jobs.get(seg[1])) throw httpErr(404, 'tarefa não encontrada');
+      if (seg.length === 2 && m === 'PATCH') { const b = await readBody(req); return sendJson(res, 200, wrap400(() => jobs.update(seg[1], b))); }
+      if (seg.length === 2 && m === 'DELETE') { jobs.remove(seg[1]); return sendJson(res, 200, { ok: true }); }
+      if (seg[2] === 'run' && m === 'POST') { try { return sendJson(res, 200, await jobs.runNow(seg[1])); } catch (e) { throw httpErr(400, e.message); } }
+      throw httpErr(404, 'rota não encontrada');
+    }
+
+    // ---- canais
+    if (seg[0] === 'channels') {
+      if (seg.length === 1 && m === 'GET') return sendJson(res, 200, hub.status());
+      const ch = seg[1];
+      if (!hub.adapters.has(ch)) throw httpErr(404, 'canal desconhecido');
+      if (seg.length === 2 && m === 'PUT') {
+        const b = await readBody(req);
+        if (b.token !== undefined) {
+          const t = String(b.token || '').trim();
+          if (t && (/\s/.test(t) || t.length < 20)) throw httpErr(400, 'token com formato estranho — copie de novo');
+          db.setSetting(ch + '_token', t);
+          if (!t) hub.unpair(ch);
+          try { await hub.restart(ch); } catch (e) { bus.emit({ type: 'state_changed' }); throw httpErr(400, 'não conectou: ' + e.message); }
+        }
+        if (b.notify) for (const [k, v] of Object.entries(b.notify)) wrap400(() => hub.setNotify(ch, k, !!v));
+        bus.emit({ type: 'state_changed' });
+        return sendJson(res, 200, hub.status()[ch]);
+      }
+      if (seg[2] === 'pair' && m === 'POST') { const code = hub.newPairCode(ch); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { code }); }
+      if (seg[2] === 'unpair' && m === 'POST') { hub.unpair(ch); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
+      if (seg[2] === 'test' && m === 'POST') { const r = await hub.send(ch, '🛰 Teste da estação Star Trek 1: canal funcionando.'); if (!r.length) throw httpErr(400, 'não enviei — canal desconectado ou sem pareamento'); return sendJson(res, 200, { ok: true }); }
+      throw httpErr(404, 'rota não encontrada');
+    }
+
+    // ---- voz
+    if (p === '/api/voice' && m === 'GET') {
+      const s2 = voice.sttSettings(db);
+      return sendJson(res, 200, { voice: db.getSetting('tts_voice', voice.DEFAULT_VOICE), voices: voice.VOICES, stt: { configured: !!s2.key, base: s2.base, model: s2.model } });
+    }
+    if (p === '/api/voice' && m === 'PUT') {
+      const b = await readBody(req);
+      if (b.voice !== undefined) { if (!voice.VOICES[b.voice]) throw httpErr(400, 'voz desconhecida'); db.setSetting('tts_voice', b.voice); }
+      if (b.stt_api_key !== undefined) db.setSetting('stt_api_key', String(b.stt_api_key || '').trim());
+      if (b.stt_base_url !== undefined) { const u = String(b.stt_base_url || '').trim(); if (u && !/^https:\/\//.test(u)) throw httpErr(400, 'use um endereço https://'); db.setSetting('stt_base_url', u); }
+      if (b.stt_model !== undefined) db.setSetting('stt_model', String(b.stt_model || '').trim().slice(0, 80));
+      return sendJson(res, 200, { ok: true });
+    }
+    if (p === '/api/tts' && m === 'POST') {
+      const b = await readBody(req);
+      let mp3;
+      try { mp3 = await (overrides.speak || voice.speak)(b.text, b.voice || db.getSetting('tts_voice', voice.DEFAULT_VOICE)); }
+      catch (e) { throw httpErr(502, 'voz natural indisponível: ' + e.message); }
+      res.writeHead(200, { 'content-type': 'audio/mpeg', 'cache-control': 'no-store', 'content-length': mp3.length });
+      return res.end(mp3);
+    }
+    if (p === '/api/stt' && m === 'POST') {
+      const buf = await readRaw(req);
+      try { return sendJson(res, 200, { text: await (overrides.transcribe || ((bb, mm) => voice.transcribe(db, bb, mm)))(buf, String(req.headers['content-type'] || 'audio/webm')) }); }
+      catch (e) { throw httpErr(400, e.message); }
     }
 
     // ---- habilidades
@@ -610,11 +749,7 @@ async function start(overrides) {
     // ---- permissões
     if (p === '/api/consent' && m === 'POST') {
       const b = await readBody(req);
-      const pc = pendingConsent.get(b.id);
-      if (!pc) throw httpErr(404, 'pedido não encontrado (já respondido ou expirado)');
-      pendingConsent.delete(b.id);
-      pc.resolve(pc.req.choices.includes(b.decision) ? b.decision : 'deny');
-      bus.emit({ type: 'consent_closed', id: b.id });
+      if (!resolveConsent(b.id, b.decision)) throw httpErr(404, 'pedido não encontrado (já respondido ou expirado)');
       return sendJson(res, 200, { ok: true });
     }
     if (p === '/api/grants' && m === 'DELETE') {
@@ -644,7 +779,7 @@ async function start(overrides) {
       'content-type': MIME[path.extname(file)] || 'application/octet-stream',
       'cache-control': file.includes(path.sep + 'assets' + path.sep) ? 'public, max-age=86400' : 'no-cache',
       'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
       'referrer-policy': 'no-referrer'
     };
     if (rel === 'index.html') {
@@ -662,10 +797,12 @@ async function start(overrides) {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(overrides.port != null ? overrides.port : config.port, overrides.host || config.host, resolve); });
   scheduler.start();
   night.start();
+  jobs.start();
+  if (!overrides.noChannels) hub.startAll().catch(e => log('canais: ' + e.message));
   const url = 'http://127.0.0.1:' + server.address().port;
   return {
-    url, token, db, station, mcp, bus,
-    async close() { scheduler.stop(); night.stop(); await mcp.closeAll(); for (const a of db.listAgents()) station.cancel(a.id); await new Promise(r => server.close(r)); server.closeAllConnections && server.closeAllConnections(); if (!overrides.db) db.close(); }
+    url, token, db, station, mcp, bus, hub, jobs, questions, deliverables,
+    async close() { scheduler.stop(); night.stop(); jobs.stop(); hub.stopAll(); if (browser && browser.shutdown) browser.shutdown(); await mcp.closeAll(); for (const a of db.listAgents()) station.cancel(a.id); await new Promise(r => server.close(r)); server.closeAllConnections && server.closeAllConnections(); if (!overrides.db) db.close(); }
   };
 }
 

@@ -41,10 +41,12 @@
   </section>
 
   <aside class="panel">
+    <div id="questions-bar" class="questions-bar" aria-live="polite"></div>
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="crew" class="on">Tripulação</button>
       <button role="tab" data-tab="chat">Canal</button>
       <button role="tab" data-tab="missions">Missões</button>
+      <button role="tab" data-tab="outbox">Entregas <span class="tag ask" id="outbox-badge" hidden></span></button>
       <button role="tab" data-tab="recipes">Receitas</button>
       <button role="tab" data-tab="belts">Esteiras</button>
       <button role="tab" data-tab="sched">Agenda</button>
@@ -52,6 +54,7 @@
       <button role="tab" data-tab="notes">Caderno</button>
       <button role="tab" data-tab="skills">Habilidades <span class="tag ask" id="skills-badge" hidden></span></button>
       <button role="tab" data-tab="mcp">Conectores</button>
+      <button role="tab" data-tab="channels">Canais</button>
       <button role="tab" data-tab="log">Registro</button>
     </nav>
 
@@ -155,6 +158,18 @@
       </div>
       <h4>Relatórios anteriores</h4>
       <div id="report-list" class="list"></div>
+    </div>
+
+    <!-- ENTREGAS -->
+    <div class="tab-body" data-body="outbox">
+      <p class="muted">O que a tripulação terminou, num lugar só. Cada entrega passa por uma <b>conferência automática</b> (o arquivo existe, não está vazio, está no formato certo, sem marcadores esquecidos). Aceite ou peça para refazer.</p>
+      <div class="chips-row" id="outbox-filter">
+        <button type="button" data-f="nova" class="on">Novas</button>
+        <button type="button" data-f="todas">Todas</button>
+        <button type="button" data-f="refazer">Refazendo</button>
+        <button type="button" data-f="aceita">Aceitas</button>
+      </div>
+      <div id="outbox-list" class="list"></div>
     </div>
 
     <!-- RECEITAS -->
@@ -282,6 +297,89 @@
         <div class="actions"><button class="btn primary">Agendar</button></div>
       </form>
       <div id="sched-list" class="list"></div>
+
+      <h4>Tarefas contínuas</h4>
+      <details class="card form">
+        <summary><b>🔁 Repetir até terminar</b> <span class="muted">— uma rodada a cada tanto, até o tripulante dizer CONCLUÍDO</span></summary>
+        <form id="loop-form" class="form" autocomplete="off">
+          <label>Tripulante <select name="agent_id" class="agent-select"></select></label>
+          <label>Tarefa (o trabalho inteiro) <textarea name="prompt" rows="3" required placeholder="ex.: traduza o livro em entrada/livro.pdf para inglês, um capítulo por rodada, salvando em traducao/"></textarea></label>
+          <div class="row2">
+            <label>Rodada a cada (min) <input name="interval_min" type="number" min="5" max="1440" value="15"></label>
+            <label>Máximo de rodadas <input name="max_runs" type="number" min="1" max="200" value="20"></label>
+          </div>
+          <div class="actions"><button class="btn primary">Começar</button></div>
+        </form>
+      </details>
+      <details class="card form">
+        <summary><b>👁 Vigiar site</b> <span class="muted">— avisa quando a página mudar</span></summary>
+        <form id="watch-form" class="form" autocomplete="off">
+          <label>Endereço <input name="url" type="url" required placeholder="https://…"></label>
+          <label>Só o trecho com esta palavra (opcional) <input name="keyword" placeholder="ex.: R$, esgotado, inscrições"></label>
+          <label>Verificar a cada (min) <input name="interval_min" type="number" min="10" max="1440" value="60"></label>
+          <label>Quando mudar, mandar tarefa para (opcional) <select name="agent_id" class="agent-select-opt"></select></label>
+          <label>Tarefa (opcional) <input name="prompt" placeholder="ex.: compare com o preço de ontem e diga se vale comprar"></label>
+          <div class="actions"><button class="btn primary">Vigiar</button></div>
+        </form>
+      </details>
+      <div id="jobs-list" class="list"></div>
+    </div>
+
+    <!-- CANAIS -->
+    <div class="tab-body" data-body="channels">
+      <p class="muted">Fale com a tripulação pelo celular. As mensagens vão para o Capitão; perguntas, pedidos de permissão, entregas e o relatório da manhã chegam para você lá.</p>
+      <div class="card form" id="ch-telegram">
+        <h3>✈️ Telegram</h3>
+        <ol class="steps">
+          <li>No Telegram, abra <b>@BotFather</b> e mande <code>/newbot</code>. Escolha um nome e um usuário terminado em <i>bot</i>.</li>
+          <li>Copie o <b>token</b> que ele mostrar e cole aqui.</li>
+          <li>Toque em <b>Gerar código</b> e mande o código para o seu bot.</li>
+        </ol>
+        <label>Token do bot <input name="token" type="password" autocomplete="off" placeholder="123456789:AA…"></label>
+        <div class="ch-status muted"></div>
+        <div class="actions">
+          <button type="button" class="btn primary" data-act="save">Salvar e conectar</button>
+          <button type="button" class="btn" data-act="pair">Gerar código</button>
+          <button type="button" class="btn ghost" data-act="test">Testar</button>
+          <button type="button" class="btn danger" data-act="unpair">Desparear</button>
+        </div>
+        <div class="ch-notify"></div>
+      </div>
+      <div class="card form" id="ch-discord">
+        <h3>🎮 Discord</h3>
+        <ol class="steps">
+          <li>Em <b>discord.com/developers/applications</b>: <i>New Application</i> → aba <b>Bot</b> → <i>Reset Token</i> e copie.</li>
+          <li>Na mesma aba, ligue <b>Message Content Intent</b>.</li>
+          <li>Cole o token aqui e toque em <b>Salvar e conectar</b>. Depois use o link <b>Convidar</b> para pôr o bot num servidor seu.</li>
+          <li>Mande uma <b>mensagem direta</b> para o bot com o código de pareamento.</li>
+        </ol>
+        <label>Token do bot <input name="token" type="password" autocomplete="off"></label>
+        <div class="ch-status muted"></div>
+        <div class="actions">
+          <button type="button" class="btn primary" data-act="save">Salvar e conectar</button>
+          <button type="button" class="btn" data-act="pair">Gerar código</button>
+          <button type="button" class="btn ghost" data-act="test">Testar</button>
+          <button type="button" class="btn danger" data-act="unpair">Desparear</button>
+        </div>
+        <div class="ch-notify"></div>
+      </div>
+      <div class="card form" id="voice-card">
+        <h3>🎙 Voz</h3>
+        <div class="row2">
+          <label>Voz da estação <select name="voice"></select></label>
+          <label>&nbsp;<button type="button" class="btn" id="voice-test">▶ Ouvir</button></label>
+        </div>
+        <label class="check"><input type="checkbox" id="voice-natural" checked> Usar a voz natural do servidor (senão, a do navegador)</label>
+        <p class="muted">Ditado em qualquer navegador (Safari, iPad, Firefox) e áudios do Telegram/Discord: precisa de uma chave de transcrição. A <b>Groq</b> é grátis: crie em <b>console.groq.com/keys</b>.</p>
+        <label>Chave de transcrição (Groq) <input name="stt_api_key" type="password" autocomplete="off" placeholder="gsk_…"></label>
+        <details><summary class="muted">Avançado</summary>
+          <label>Endereço (compatível com OpenAI) <input name="stt_base_url" placeholder="https://api.groq.com/openai/v1"></label>
+          <label>Modelo <input name="stt_model" placeholder="whisper-large-v3-turbo"></label>
+        </details>
+        <label class="check"><input type="checkbox" id="voice-server-stt"> Usar o ditado do servidor também no Chrome</label>
+        <div class="muted" id="voice-status"></div>
+        <div class="actions"><button type="button" class="btn primary" id="voice-save">Salvar voz</button></div>
+      </div>
     </div>
 
     <!-- CONECTORES MCP -->
