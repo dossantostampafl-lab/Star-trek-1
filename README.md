@@ -70,6 +70,20 @@ e uma sala mobiliada de acordo com a função. Toque em **✏️ Editar estaçã
 
 Tudo é salvo na hora. A arte vem do StarNet (MIT) — créditos em `web/assets/NOTICE.md`.
 
+## Receitas, habilidades e caderno
+
+- **Receitas** (aba Receitas): 34 tarefas prontas em 8 categorias — resumir documento, achar a pegadinha num contrato,
+  pesquisa profunda, checar fato, comparar opções, proposta comercial, prospectar clientes, vigiar preço, limpar
+  planilha, corrigir bug, revisão da semana… Preencha os campos e toque **▶ Rodar agora** (vai para o tripulante certo)
+  ou **🔁 Criar rotina** (vira agendamento). Crie as suas com `{campo}` no texto para perguntar na hora.
+- **Habilidades** (aba Habilidades): 64 métodos prontos da biblioteca do StarNet (pesquisa com fontes, depuração
+  sistemática, TDD, revisão de contrato, texto mais humano…). Cada tripulante já vem com as da sua função; ligue ou
+  desligue por tripulante. No prompt entra só a lista — o método completo o tripulante lê com `skill_view` quando precisa.
+  Tripulantes podem **propor** habilidades novas (`skill_propose`); elas só valem depois que você aprova.
+- **Caderno** (aba Caderno): memória de longo prazo. Cada tripulante anota com `notebook_write` e busca com
+  `notebook_read`; o caderno **da tripulação** vale para todos. Notas 📌 fixadas entram sempre no contexto. Senhas e
+  chaves são apagadas antes de salvar. Exportar/restaurar em JSON (restaurar só acrescenta).
+
 ## Arquivos
 
 Aba **Arquivos** (ou o 📎 no Canal): envie arquivos de até 25 MB. Eles vão para a **pasta compartilhada**
@@ -166,6 +180,10 @@ server/
   mcp.js               cliente MCP (stdio e HTTP)
   db.js                SQLite (node:sqlite)
   decor.js             personagens e móveis de cada sala (catálogo, validação, visual padrão)
+  skills.js            biblioteca de habilidades (skill_view, skill_propose, aprovação)
+  notebook.js          caderno de anotações (notebook_write/read, fixadas no prompt, backup)
+  recipes.js           catálogo de receitas e receitas próprias
+skills/library/        64 habilidades (StarNet, MIT — créditos em skills/NOTICE.md)
   auth.js              login por senha (acesso pela internet)
 deploy/oracle/         instalação e atualização na Oracle Cloud
 docs/ORACLE.md         guia passo a passo da Oracle

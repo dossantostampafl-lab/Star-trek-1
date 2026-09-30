@@ -85,15 +85,16 @@ function openDb(file) {
   addCol('agents', 'trust', 'INTEGER DEFAULT 50');
   addCol('agents', 'props', "TEXT DEFAULT '[]'");
   addCol('agents', 'sprite', "TEXT DEFAULT ''");
+  addCol('agents', 'skills', 'TEXT DEFAULT NULL');   // NULL = habilidades padrão da função
   addCol('runs', 'rating', 'INTEGER DEFAULT 0');
 
   const q = (sql) => db.prepare(sql);
   const json = (s, d) => { try { return JSON.parse(s); } catch (_) { return d; } };
   const plain = (r) => r ? Object.assign({}, r) : null;
-  const agentRow = (r) => r && Object.assign(plain(r), { shell: !!r.shell, captain: !!r.captain, mcp: json(r.mcp, []), props: json(r.props, []) });
+  const agentRow = (r) => r && Object.assign(plain(r), { shell: !!r.shell, captain: !!r.captain, mcp: json(r.mcp, []), props: json(r.props, []), skills: r.skills == null ? null : json(r.skills, null) });
 
   const missionRow = (r) => r && Object.assign(plain(r), { steps: json(r.steps, []), log: json(r.log, []) });
-  const AGENT_FIELDS = ['name', 'role', 'instructions', 'provider', 'model', 'color', 'room_x', 'room_y', 'budget_usd', 'shell', 'captain', 'mcp', 'xp', 'trust', 'props', 'sprite'];
+  const AGENT_FIELDS = ['name', 'role', 'instructions', 'provider', 'model', 'color', 'room_x', 'room_y', 'budget_usd', 'shell', 'captain', 'mcp', 'xp', 'trust', 'props', 'sprite', 'skills'];
 
   const api = {
     raw: db,
@@ -115,7 +116,7 @@ function openDb(file) {
       const sets = [], vals = [];
       for (const k of AGENT_FIELDS) if (patch[k] !== undefined) {
         sets.push(k + ' = ?');
-        vals.push((k === 'shell' || k === 'captain') ? (patch[k] ? 1 : 0) : (k === 'mcp' || k === 'props') ? JSON.stringify(patch[k] || []) : k === 'name' ? String(patch[k]).slice(0, 40) : patch[k]);
+        vals.push((k === 'shell' || k === 'captain') ? (patch[k] ? 1 : 0) : (k === 'mcp' || k === 'props') ? JSON.stringify(patch[k] || []) : k === 'skills' ? (patch[k] === null ? null : JSON.stringify(patch[k])) : k === 'name' ? String(patch[k]).slice(0, 40) : patch[k]);
       }
       if (sets.length) q('UPDATE agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...vals, id);
       return api.getAgent(id);

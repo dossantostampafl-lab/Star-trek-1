@@ -21,6 +21,9 @@ const mcpCatalog = require('./mcp-catalog.js');
 const missionsMod = require('./missions.js');
 const { makeGrowth } = require('./growth.js');
 const decor = require('./decor.js');
+const { makeSkills } = require('./skills.js');
+const { makeNotebook } = require('./notebook.js');
+const { makeRecipes } = require('./recipes.js');
 
 const WEB = path.join(ROOT, 'web');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -82,8 +85,13 @@ async function start(overrides) {
   let station = null;
   const mcp = makeMcpManager({ log, onChange: () => { if (station) station.invalidate(); bus.emit({ type: 'mcp_changed' }); } });
   const growth = makeGrowth({ db, bus, invalidate: () => station && station.invalidate() });
+  const skills = makeSkills({ db, bus });
+  const notebook = makeNotebook({ db, bus, invalidate: (id) => station && station.invalidate(id) });
+  const recipes = makeRecipes({ db });
   station = makeStation({ config, db, bus, consent, checkpoints, shellAvailable, shellRunner: overrides.shellRunner, log, retries: overrides.retries, providerFor: overrides.providerFor, mcp,
-    onRunEnd: growth.onRunEnd, onMissionDone: growth.onMissionDone, growthTools: (a) => [growth.beliefTool(a)], extraContext: growth.extraContext });
+    onRunEnd: growth.onRunEnd, onMissionDone: growth.onMissionDone,
+    growthTools: (a) => [growth.beliefTool(a), ...skills.tools(a), ...notebook.tools(a)],
+    extraContext: (a) => [growth.extraContext(a), skills.context(a), notebook.context(a)].filter(Boolean).join('\n\n') });
   const night = missionsMod.makeNightShift({ db, station, bus, log, tickMs: overrides.nightTickMs, now: overrides.now });
   const scheduler = makeScheduler({
     list: () => db.listSchedules(),
@@ -164,7 +172,9 @@ async function start(overrides) {
   function state() {
     const agents = db.listAgents();
     return {
-      agents: agents.map(a => Object.assign(a, { spent_usd: db.spentUsd(a.id) })),
+      agents: agents.map(a => Object.assign(a, { spent_usd: db.spentUsd(a.id), skills_on: skills.forAgent(a).map(x => x.slug) })),
+      skillsPending: skills.pending(),
+      noteCounts: notebook.counts(),
       conveyors: db.listConveyors(),
       schedules: db.listSchedules().map(s => Object.assign(s, { info: describe(s.cron) })),
       status: station.status(),
@@ -204,6 +214,11 @@ async function start(overrides) {
     if (b.shell !== undefined) out.shell = !!b.shell;
     if (b.captain !== undefined) out.captain = !!b.captain;
     if (b.mcp !== undefined) out.mcp = Array.isArray(b.mcp) ? b.mcp.map(String).slice(0, 20) : [];
+    if (b.skills !== undefined) {
+      if (b.skills === null) out.skills = null;   // volta ao padrão da função
+      else if (!Array.isArray(b.skills)) throw httpErr(400, 'habilidades inválidas');
+      else out.skills = [...new Set(b.skills.map(String))].filter(x => skills.get(x)).slice(0, 40);
+    }
     try {
       if (b.sprite !== undefined && b.sprite !== '') out.sprite = decor.cleanSprite(b.sprite);
       if (b.props !== undefined) out.props = decor.cleanProps(b.props);
@@ -287,7 +302,7 @@ async function start(overrides) {
         bus.emit({ type: 'state_changed' });
         return sendJson(res, 200, upd);
       }
-      if (seg.length === 2 && m === 'DELETE') { station.cancel(a.id); db.deleteAgent(a.id); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
+      if (seg.length === 2 && m === 'DELETE') { station.cancel(a.id); notebook.removeAgent(a.id); db.deleteAgent(a.id); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
       if (seg[2] === 'history' && m === 'GET') return sendJson(res, 200, visibleHistory(a.id));
       if (seg[2] === 'message' && m === 'POST') {
         const b = await readBody(req);
@@ -401,6 +416,80 @@ async function start(overrides) {
         return sendJson(res, 201, c);
       }
       if (seg.length === 2 && m === 'DELETE') { db.deleteConveyor(seg[1]); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
+    }
+
+    // ---- habilidades
+    if (seg[0] === 'skills') {
+      const wrap = (fn) => { try { return fn(); } catch (e) { throw e.status ? e : httpErr(400, e.message); } };
+      if (seg.length === 1 && m === 'GET') return sendJson(res, 200, skills.summary());
+      if (seg.length === 1 && m === 'POST') {
+        const b = await readBody(req);
+        const s2 = wrap(() => skills.create(b, { status: 'ativa' }));
+        bus.emit({ type: 'state_changed' });
+        return sendJson(res, 201, s2);
+      }
+      const sk = skills.get(seg[1]);
+      if (!sk) throw httpErr(404, 'habilidade não encontrada');
+      if (seg.length === 2 && m === 'GET') return sendJson(res, 200, sk);
+      if (seg.length === 2 && m === 'PUT') { const b = await readBody(req); const u = wrap(() => skills.update(sk.slug, b)); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, u); }
+      if (seg.length === 3 && seg[2] === 'approve' && m === 'POST') { const u = wrap(() => skills.update(sk.slug, { status: 'ativa' })); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, u); }
+      if (seg.length === 2 && m === 'DELETE') { wrap(() => skills.remove(sk.slug)); station.invalidate(); bus.emit({ type: 'state_changed' }); return sendJson(res, 200, { ok: true }); }
+      throw httpErr(404, 'rota não encontrada');
+    }
+
+    // ---- caderno
+    if (seg[0] === 'notes') {
+      const wrap = (fn) => { try { return fn(); } catch (e) { throw e.status ? e : httpErr(400, e.message); } };
+      const owner = (id) => { if (id === '*' || id === notebook.SHARED) return notebook.SHARED; return agentOr404(id).id; };
+      if (seg.length === 1 && m === 'GET') {
+        const ag = url.searchParams.get('agent') || 'all';
+        const who = ag === 'all' ? 'all' : owner(ag);
+        return sendJson(res, 200, notebook.list(who, { q: url.searchParams.get('q') || '' }).slice(0, 300));
+      }
+      if (seg[1] === 'export' && m === 'GET') {
+        const ag = url.searchParams.get('agent') || 'all';
+        return sendJson(res, 200, { version: 1, exported_at: new Date().toISOString(), agent: ag, notes: notebook.exportNotes(ag === 'all' ? 'all' : owner(ag)) });
+      }
+      if (seg[1] === 'restore' && m === 'POST') {
+        const b = await readBody(req);
+        const r = wrap(() => notebook.restore(owner(String(b.agent_id || '')), b.notes));
+        return sendJson(res, 200, r);
+      }
+      if (seg.length === 1 && m === 'POST') {
+        const b = await readBody(req);
+        const n = wrap(() => notebook.create(b.shared ? notebook.SHARED : owner(String(b.agent_id || '')), b, 'comandante'));
+        return sendJson(res, 201, n);
+      }
+      if (seg.length === 2 && m === 'PATCH') { const b = await readBody(req); if (b.agent_id) owner(b.agent_id); return sendJson(res, 200, wrap(() => notebook.update(seg[1], b))); }
+      if (seg.length === 2 && m === 'DELETE') { wrap(() => notebook.remove(seg[1])); return sendJson(res, 200, { ok: true }); }
+      throw httpErr(404, 'rota não encontrada');
+    }
+
+    // ---- receitas
+    if (seg[0] === 'recipes') {
+      const wrap = (fn) => { try { return fn(); } catch (e) { throw e.status ? e : httpErr(400, e.message); } };
+      if (seg.length === 1 && m === 'GET') return sendJson(res, 200, recipes.all());
+      if (seg.length === 1 && m === 'POST') { const b = await readBody(req); const r = wrap(() => recipes.createCustom(b)); return sendJson(res, 201, r); }
+      const rc = recipes.get(seg[1]);
+      if (!rc) throw httpErr(404, 'receita não encontrada');
+      if (seg.length === 2 && m === 'DELETE') { wrap(() => recipes.removeCustom(rc.id)); return sendJson(res, 200, { ok: true }); }
+      if (seg[2] === 'run' && m === 'POST') {
+        const b = await readBody(req);
+        const ag = b.agent_id ? agentOr404(b.agent_id) : recipes.target(rc.to);
+        if (!ag) throw httpErr(409, 'a estação não tem tripulantes — embarque a tripulação primeiro');
+        const text = wrap(() => recipes.compose(rc, b.values || {}));
+        if (b.routine) {
+          const cron = String(b.routine.cron || rc.cadence || '').trim();
+          let next;
+          try { next = nextRun(cron, new Date()); } catch (e) { throw httpErr(400, 'cron inválido: ' + e.message); }
+          const sc = db.createSchedule({ agent_id: ag.id, cron, prompt: text.slice(0, 4000), next_run: next && next.toISOString() });
+          bus.emit({ type: 'state_changed' });
+          return sendJson(res, 201, { schedule: sc, agentId: ag.id, agentName: ag.name });
+        }
+        const runId = station.enqueue(ag.id, text, 'chat');
+        return sendJson(res, 202, { runId, agentId: ag.id, agentName: ag.name });
+      }
+      throw httpErr(404, 'rota não encontrada');
     }
 
     // ---- agendamentos

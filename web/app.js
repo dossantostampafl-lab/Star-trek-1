@@ -67,7 +67,7 @@
     Station.setData(S.agents, S.conveyors, S.status);
     if (Station.isEditing()) renderEditor();
     Station.setSelected(selected);
-    renderTop(); renderCrew(); renderAgentSelects(); renderChatHead(); renderBelts(); renderSchedules(); renderMcp(); renderLog(); renderFilesScope();
+    renderTop(); renderCrew(); renderLibSelects(); renderAgentSelects(); renderChatHead(); renderBelts(); renderSchedules(); renderMcp(); renderLog(); renderFilesScope();
   }
 
   function renderTop() {
@@ -188,6 +188,9 @@
     if (name === 'files') loadFiles();
     if (name === 'mcp') loadCatalog();
     if (name === 'missions') loadMissions();
+    if (name === 'recipes') loadRecipes();
+    if (name === 'notes') loadNotes();
+    if (name === 'skills') loadSkills();
   }
   $$('.tabs button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
@@ -627,6 +630,8 @@
       case 'trophy': toast(ev.icon + ' ' + ev.name + ': ' + ev.title); refreshSoon(); break;
       case 'level_up': toast('⬆ ' + ev.name + ' subiu para o nível ' + ev.level + '!'); refreshSoon(); break;
       case 'belief_proposed': toast('📓 ' + agentName(ev.agentId) + ' anotou algo sobre você — veja o Dossiê.'); loadBeliefs(); break;
+      case 'skill_proposed': toast('🧩 ' + agentName(ev.agentId) + ' propôs a habilidade "' + ev.name + '" — aprove na aba Habilidades.'); refreshSoon(); if (tabOn('skills')) loadSkills(); break;
+      case 'notes_changed': if (tabOn('notes')) loadNotesSoon(); break;
       case 'files_changed': if ($('.tab-body[data-body=files]').classList.contains('on')) loadFiles(); break;
       case 'history_reset': if (ev.agentId === selected) loadHistory(); break;
       case 'run_start':
@@ -718,6 +723,245 @@
     chip.textContent = '● offline'; chip.className = 'chip bad';
     setTimeout(() => connect((attempt || 0) + 1), Math.min(10000, 800 * Math.pow(2, attempt || 0)));
   }
+
+  const tabOn = (name) => $('.tab-body[data-body=' + name + ']').classList.contains('on');
+  function download(name, data) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  // selects das abas Caderno, Habilidades e Receitas
+  function renderLibSelects() {
+    const keep = (sel, opts) => { const v = sel.value; sel.replaceChildren(...opts); if ([...sel.options].some(o => o.value === v)) sel.value = v; };
+    keep($('#notes-agent'), [h('option', { value: 'all', text: '📚 Todos os cadernos' }), h('option', { value: '*', text: '👥 Caderno da tripulação' }),
+      ...S.agents.map(a => h('option', { value: a.id, text: a.name + ' (' + ((S.noteCounts || {})[a.id] || 0) + ')' }))]);
+    keep($('#note-owner'), [h('option', { value: '*', text: '👥 Tripulação (todos veem)' }), ...S.agents.map(a => h('option', { value: a.id, text: a.name }))]);
+    keep($('#skills-agent'), S.agents.map(a => h('option', { value: a.id, text: 'Habilidades de ' + a.name })));
+    for (const sel of $$('.agent-select-cap')) keep(sel, [h('option', { value: 'captain', text: 'Capitão (ele delega)' }), ...S.agents.filter(a => !a.captain).map(a => h('option', { value: a.id, text: a.name }))]);
+    const badge = $('#skills-badge');
+    badge.hidden = !S.skillsPending; badge.textContent = S.skillsPending || '';
+  }
+
+  // ---------- receitas ----------
+  let RECIPES = [], recipeCat = 'Todas', recipeOpen = null;
+  const ROLE_LABEL = { captain: 'Capitão', research: 'Pesquisadora', writer: 'Redator', reviewer: 'Revisor', engineer: 'Engenheira' };
+  async function loadRecipes() { RECIPES = await api('GET', '/api/recipes').catch(e => { toast(e.message, true); return []; }); renderRecipes(); }
+  function recipeTo(r) { const a = S.agents.find(x => x.id === r.to); return a ? a.name : (ROLE_LABEL[r.to] || 'Capitão'); }
+  function renderRecipes() {
+    const cats = ['Todas', ...new Set(RECIPES.map(r => r.category))];
+    $('#recipe-cats').replaceChildren(...cats.map(c => h('button', { type: 'button', class: c === recipeCat ? 'on' : '', text: c, onclick: () => { recipeCat = c; renderRecipes(); } })));
+    const q = $('#recipe-search').value.trim().toLowerCase();
+    const list = RECIPES.filter(r => (recipeCat === 'Todas' || r.category === recipeCat) && (!q || (r.name + ' ' + r.blurb).toLowerCase().includes(q)));
+    const grid = $('#recipe-grid');
+    grid.replaceChildren(...list.map(r => h('button', { type: 'button', class: 'recipe' + (recipeOpen && recipeOpen.id === r.id ? ' on' : ''), onclick: () => openRecipe(r) },
+      h('span', { class: 'rname', text: r.emoji + ' ' + r.name }), h('span', { class: 'rblurb', text: r.blurb || '' }),
+      h('span', { class: 'rmeta', text: '→ ' + recipeTo(r) + (r.cadence ? ' · 🔁 rotina' : '') + (r.custom ? ' · minha' : '') }))));
+    if (!list.length) grid.append(h('div', { class: 'empty', text: 'Nenhuma receita encontrada.' }));
+  }
+  $('#recipe-search').addEventListener('input', () => renderRecipes());
+
+  function openRecipe(r) {
+    recipeOpen = r; renderRecipes();
+    const box = $('#recipe-run');
+    const fields = (r.params || []).map(p => {
+      const opt = { name: p.key, placeholder: p.placeholder || '', required: p.required };
+      let input;
+      if (p.type === 'textarea') input = h('textarea', Object.assign({ rows: 3 }, opt));
+      else if (p.type === 'choice') { input = h('select', { name: p.key }, ...p.options.map(o => h('option', { value: o, text: o }))); input.value = p.default || p.options[0]; }
+      else input = h('input', opt);
+      return h('label', null, p.label + (p.required ? '' : ' (opcional)'), input);
+    });
+    const who = h('select', { name: '__agent' }, h('option', { value: '', text: 'Quem a receita indica: ' + recipeTo(r) }), ...S.agents.map(a => h('option', { value: a.id, text: a.name })));
+    const cron = h('input', { name: '__cron', value: r.cadence || '0 9 * * 1-5', placeholder: 'minuto hora dia mês dia-semana' });
+    const form = h('form', { class: 'card form recipe-run', autocomplete: 'off' },
+      h('h3', { text: r.emoji + ' ' + r.name }),
+      r.blurb ? h('p', { class: 'muted', text: r.blurb }) : null,
+      ...fields,
+      h('label', null, 'Enviar para', who),
+      r.steps && r.steps.length ? h('details', null, h('summary', { class: 'muted', text: 'Passo a passo que o tripulante vai seguir' }), h('ol', null, ...r.steps.map(x => h('li', { text: x })))) : null,
+      r.skills && r.skills.length ? h('p', { class: 'muted', text: 'Habilidades usadas: ' + r.skills.join(', ') }) : null,
+      h('details', null, h('summary', { class: 'muted', text: '🔁 Virar rotina (agendamento)' }), h('label', null, 'Quando (cron)', cron),
+        h('p', { class: 'muted', text: 'ex.: 0 8 * * 1-5 = dias úteis às 8h · 0 17 * * 5 = sexta às 17h' }),
+        h('button', { type: 'button', class: 'btn', text: '🔁 Criar rotina', onclick: safe(() => runRecipe(r, form, true)) })),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn primary', text: '▶ Rodar agora' }),
+        h('button', { type: 'button', class: 'btn ghost', text: 'Fechar', onclick: () => { recipeOpen = null; box.replaceChildren(); renderRecipes(); } }),
+        r.custom ? h('button', { type: 'button', class: 'btn danger', text: 'Apagar receita', onclick: safe(async () => {
+          if (!confirm('Apagar a receita "' + r.name + '"?')) return;
+          await api('DELETE', '/api/recipes/' + r.id); recipeOpen = null; box.replaceChildren(); await loadRecipes();
+        }) }) : null));
+    form.addEventListener('submit', safe(async (e) => { e.preventDefault(); await runRecipe(r, form, false); }));
+    box.replaceChildren(form);
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  async function runRecipe(r, form, routine) {
+    const values = {};
+    for (const p of r.params || []) values[p.key] = form.elements[p.key].value;
+    const body = { values, agent_id: form.elements.__agent.value || undefined };
+    if (routine) body.routine = { cron: form.elements.__cron.value.trim() };
+    const res = await api('POST', '/api/recipes/' + r.id + '/run', body);
+    recipeOpen = null; $('#recipe-run').replaceChildren(); renderRecipes();
+    if (routine) { toast('🔁 Rotina criada para ' + res.agentName + ' — veja na aba Agenda.'); await refresh(); return; }
+    toast(r.emoji + ' Receita enviada para ' + res.agentName + '.');
+    openChat(res.agentId);
+  }
+  $('#recipe-form').addEventListener('submit', safe(async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const r = await api('POST', '/api/recipes', { name: f.name.value, emoji: f.emoji.value, blurb: f.blurb.value, task: f.task.value, steps: f.steps.value, to: f.to.value, cadence: f.cadence.value.trim() });
+    f.reset(); f.emoji.value = '⭐'; $('#recipe-new').open = false;
+    toast('Receita "' + r.name + '" salva.');
+    recipeCat = 'Minhas'; await loadRecipes(); openRecipe(r);
+  }));
+
+  // ---------- caderno ----------
+  let notesTimer = null;
+  const loadNotesSoon = () => { clearTimeout(notesTimer); notesTimer = setTimeout(loadNotes, 250); };
+  async function loadNotes() {
+    const ag = $('#notes-agent').value || 'all';
+    const q = $('#notes-search').value.trim();
+    const notes = await api('GET', '/api/notes?agent=' + encodeURIComponent(ag) + '&q=' + encodeURIComponent(q)).catch(e => { toast(e.message, true); return []; });
+    const box = $('#notes-list');
+    box.replaceChildren();
+    if (!notes.length) box.append(h('div', { class: 'empty', text: q ? 'Nada encontrado.' : 'Caderno vazio. Os tripulantes anotam sozinhos (notebook_write) — ou escreva uma nota abaixo.' }));
+    for (const n of notes) {
+      box.append(h('div', { class: 'item note' },
+        h('div', { class: 'grow' },
+          h('div', { class: 'title' }, n.pinned ? '📌 ' : '', n.title),
+          h('div', { class: 'sub', text: (n.shared ? '👥 tripulação' : agentName(n.agent_id)) + ' · ' + when(n.updated_at) + (n.use_count ? ' · lida ' + n.use_count + 'x' : '') + (n.history.length ? ' · ' + n.history.length + ' versão(ões) anterior(es)' : '') }),
+          n.body !== n.title ? h('div', { class: 'note-body', text: n.body }) : null),
+        h('div', { class: 'acts' },
+          h('button', { class: 'btn small ghost', text: n.pinned ? 'Desafixar' : '📌 Fixar', onclick: safe(async () => { await api('PATCH', '/api/notes/' + n.id, { pinned: !n.pinned }); loadNotes(); }) }),
+          h('button', { class: 'btn small ghost', text: 'Editar', onclick: () => editNote(n) }),
+          h('button', { class: 'btn small danger', text: 'Apagar', onclick: safe(async () => { if (!confirm('Apagar a nota "' + n.title + '"?')) return; await api('DELETE', '/api/notes/' + n.id); loadNotes(); refreshSoon(); }) }))));
+    }
+  }
+  $('#notes-agent').addEventListener('change', () => { const v = $('#notes-agent').value; if (v !== 'all') $('#note-owner').value = v; loadNotes(); });
+  $('#notes-search').addEventListener('input', loadNotesSoon);
+  function editNote(n) {
+    const f = $('#note-form');
+    f.id.value = n.id; f.owner.value = n.shared ? '*' : n.agent_id; f.title.value = n.title; f.body.value = n.body; f.pinned.checked = n.pinned;
+    $('#note-form-title').textContent = 'Editar nota'; $('#note-cancel').hidden = false;
+    f.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function resetNoteForm() {
+    const f = $('#note-form'); const owner = f.owner.value;
+    f.reset(); f.id.value = ''; f.owner.value = owner;
+    $('#note-form-title').textContent = 'Nova nota'; $('#note-cancel').hidden = true;
+  }
+  $('#note-cancel').addEventListener('click', resetNoteForm);
+  $('#note-form').addEventListener('submit', safe(async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const shared = f.owner.value === '*';
+    const body = { title: f.title.value, body: f.body.value, pinned: f.pinned.checked, shared, agent_id: shared ? undefined : f.owner.value };
+    if (f.id.value) await api('PATCH', '/api/notes/' + f.id.value, body);
+    else await api('POST', '/api/notes', body);
+    toast('Nota salva.'); resetNoteForm(); loadNotes(); refreshSoon();
+  }));
+  $('#notes-export').addEventListener('click', safe(async () => {
+    const ag = $('#notes-agent').value || 'all';
+    const data = await api('GET', '/api/notes/export?agent=' + encodeURIComponent(ag));
+    const who = ag === 'all' ? 'todos' : ag === '*' ? 'tripulacao' : agentName(ag).toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '');
+    download('caderno-' + who + '-' + new Date().toISOString().slice(0, 10) + '.json', data);
+  }));
+  $('#notes-restore').addEventListener('click', () => {
+    const ag = $('#notes-agent').value;
+    if (!ag || ag === 'all') return toast('Escolha acima o caderno que vai receber as notas (um tripulante ou a tripulação).', true);
+    $('#notes-file').click();
+  });
+  $('#notes-file').addEventListener('change', safe(async (e) => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    let data;
+    try { data = JSON.parse(await file.text()); } catch (_) { throw new Error('arquivo não é um backup do caderno (JSON)'); }
+    const r = await api('POST', '/api/notes/restore', { agent_id: $('#notes-agent').value, notes: Array.isArray(data) ? data : data.notes });
+    toast('Restauradas ' + r.added + ' nota(s); ' + r.kept + ' já existiam' + (r.skipped ? '; ' + r.skipped + ' ignorada(s)' : '') + '.');
+    loadNotes(); refreshSoon();
+  }));
+
+  // ---------- habilidades ----------
+  let SKILLS = [], skillPick = null, skillPickFor = null;
+  async function loadSkills() { SKILLS = await api('GET', '/api/skills').catch(e => { toast(e.message, true); return []; }); skillPick = null; renderSkills(); }
+  const skillsAgent = () => S.agents.find(a => a.id === $('#skills-agent').value) || S.agents[0];
+  function skillUsable(a, s) { return (s.requires || []).every(r => r === 'shell' ? a.shell : r === 'captain' ? a.captain : true); }
+  function renderSkills() {
+    const a = skillsAgent();
+    // pendentes
+    const pend = SKILLS.filter(s => s.status === 'proposta');
+    $('#skill-pending').replaceChildren(...(pend.length ? [h('div', { class: 'card form' }, h('h3', { text: '🧩 Propostas da tripulação' }),
+      ...pend.map(s => h('div', { class: 'item skill' },
+        h('div', { class: 'grow' }, h('div', { class: 'title', text: s.name }), h('div', { class: 'sub', text: s.source + ' · ' + (s.description || '') }), skillBodyToggle(s)),
+        h('div', { class: 'acts' },
+          h('button', { class: 'btn small primary', text: 'Aprovar', onclick: safe(async () => { await api('POST', '/api/skills/' + s.slug + '/approve'); toast('Habilidade aprovada.'); loadSkills(); refreshSoon(); }) }),
+          h('button', { class: 'btn small danger', text: 'Recusar', onclick: safe(async () => { await api('DELETE', '/api/skills/' + s.slug); loadSkills(); refreshSoon(); }) })))))] : []));
+    const box = $('#skills-list');
+    box.replaceChildren();
+    if (!a) { box.append(h('div', { class: 'empty', text: 'Embarque a tripulação primeiro.' })); return; }
+    if (skillPickFor !== a.id || !skillPick) { skillPick = new Set(a.skills || a.skills_on || []); skillPickFor = a.id; }
+    const q = $('#skills-search').value.trim().toLowerCase();
+    const list = SKILLS.filter(s => s.status === 'ativa' && (!q || (s.name + ' ' + s.description + ' ' + s.slug + ' ' + s.category).toLowerCase().includes(q)));
+    $('#skills-count').textContent = skillPick.size + ' ligada(s) · ' + SKILLS.filter(s => s.status === 'ativa').length + ' na biblioteca' + (a.skills ? '' : ' · usando o padrão da função');
+    let cat = null;
+    for (const s of list.sort((x, y) => (skillPick.has(y.slug) - skillPick.has(x.slug)) || x.category.localeCompare(y.category) || x.name.localeCompare(y.name))) {
+      const on = skillPick.has(s.slug);
+      const heading = on ? 'Ligadas' : s.category;
+      if (heading !== cat) { cat = heading; box.append(h('div', { class: 'skill-cat', text: heading })); }
+      const usable = skillUsable(a, s);
+      const cb = h('input', { type: 'checkbox', checked: on, disabled: !usable, 'aria-label': 'Ligar ' + s.name });
+      cb.addEventListener('change', () => { if (cb.checked) skillPick.add(s.slug); else skillPick.delete(s.slug); $('#skills-count').textContent = skillPick.size + ' ligada(s) — toque em Salvar'; });
+      box.append(h('div', { class: 'item skill' + (usable ? '' : ' off') },
+        cb,
+        h('div', { class: 'grow' },
+          h('div', { class: 'title' }, s.name, ' ', h('span', { class: 'tag', text: s.slug })),
+          h('div', { class: 'sub', text: (s.description || '') + (usable ? '' : ' — precisa de ' + s.requires.map(r => r === 'shell' ? 'terminal' : r === 'captain' ? 'ser o Capitão' : r).join(', ')) }),
+          h('div', { class: 'sub', text: 'origem: ' + (s.source || '—') + (s.requires.length ? ' · usa: ' + s.requires.join(', ') : '') }),
+          skillBodyToggle(s)),
+        s.builtin ? null : h('div', { class: 'acts' },
+          h('button', { class: 'btn small ghost', text: 'Editar', onclick: safe(() => editSkill(s)) }),
+          h('button', { class: 'btn small danger', text: 'Apagar', onclick: safe(async () => { if (!confirm('Apagar a habilidade "' + s.name + '"?')) return; await api('DELETE', '/api/skills/' + s.slug); loadSkills(); refreshSoon(); }) }))));
+    }
+    if (!list.length) box.append(h('div', { class: 'empty', text: 'Nenhuma habilidade encontrada.' }));
+  }
+  function skillBodyToggle(s) {
+    const d = h('details', null, h('summary', { class: 'muted', text: 'Ver método' }));
+    d.addEventListener('toggle', safe(async () => {
+      if (!d.open || d.querySelector('.skill-body')) return;
+      const full = await api('GET', '/api/skills/' + s.slug);
+      d.append(h('div', { class: 'skill-body', text: full.body }));
+    }));
+    return d;
+  }
+  $('#skills-agent').addEventListener('change', () => { skillPick = null; renderSkills(); });
+  $('#skills-search').addEventListener('input', () => renderSkills());
+  $('#skills-save').addEventListener('click', safe(async () => {
+    const a = skillsAgent(); if (!a) return;
+    await api('PATCH', '/api/agents/' + a.id, { skills: [...skillPick] });
+    toast('Habilidades de ' + a.name + ' salvas.'); skillPick = null; await refresh(); renderSkills();
+  }));
+  $('#skills-default').addEventListener('click', safe(async () => {
+    const a = skillsAgent(); if (!a) return;
+    await api('PATCH', '/api/agents/' + a.id, { skills: null });
+    toast(a.name + ' voltou às habilidades padrão da função.'); skillPick = null; await refresh(); renderSkills();
+  }));
+  async function editSkill(s) {
+    const full = await api('GET', '/api/skills/' + s.slug);
+    const f = $('#skill-form');
+    f.slug.value = s.slug; f.name.value = full.name; f.description.value = full.description || ''; f.category.value = full.category || 'Minhas'; f.body.value = full.body;
+    $('#skill-new').open = true; $('#skill-cancel').hidden = false; $('#skill-save').textContent = 'Salvar alterações';
+    f.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function resetSkillForm() { const f = $('#skill-form'); f.reset(); f.slug.value = ''; f.category.value = 'Minhas'; $('#skill-cancel').hidden = true; $('#skill-save').textContent = 'Salvar habilidade'; }
+  $('#skill-cancel').addEventListener('click', resetSkillForm);
+  $('#skill-form').addEventListener('submit', safe(async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const body = { name: f.name.value, description: f.description.value, category: f.category.value, body: f.body.value };
+    if (f.slug.value) await api('PUT', '/api/skills/' + f.slug.value, body);
+    else { const s = await api('POST', '/api/skills', body); toast('Habilidade "' + s.name + '" criada — ligue-a nos tripulantes.'); }
+    resetSkillForm(); $('#skill-new').open = false; loadSkills();
+  }));
 
   // ---------- editor da estação ----------
   let edPalette = false;

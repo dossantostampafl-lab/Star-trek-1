@@ -45,9 +45,12 @@
       <button role="tab" data-tab="crew" class="on">Tripulação</button>
       <button role="tab" data-tab="chat">Canal</button>
       <button role="tab" data-tab="missions">Missões</button>
+      <button role="tab" data-tab="recipes">Receitas</button>
       <button role="tab" data-tab="belts">Esteiras</button>
       <button role="tab" data-tab="sched">Agenda</button>
       <button role="tab" data-tab="files">Arquivos</button>
+      <button role="tab" data-tab="notes">Caderno</button>
+      <button role="tab" data-tab="skills">Habilidades <span class="tag ask" id="skills-badge" hidden></span></button>
       <button role="tab" data-tab="mcp">Conectores</button>
       <button role="tab" data-tab="log">Registro</button>
     </nav>
@@ -154,6 +157,34 @@
       <div id="report-list" class="list"></div>
     </div>
 
+    <!-- RECEITAS -->
+    <div class="tab-body" data-body="recipes">
+      <p class="muted">Tarefas prontas: escolha, preencha em 1 minuto e a tripulação faz. Dá para rodar agora ou virar rotina.</p>
+      <div class="row filter-row">
+        <input id="recipe-search" type="search" placeholder="Buscar receita…" aria-label="Buscar receita">
+      </div>
+      <div class="chips-row" id="recipe-cats"></div>
+      <div id="recipe-run"></div>
+      <div id="recipe-grid" class="recipe-grid"></div>
+      <details class="card form" id="recipe-new">
+        <summary><b>⭐ Criar minha receita</b></summary>
+        <form id="recipe-form" class="form" autocomplete="off">
+          <div class="row2">
+            <label>Nome <input name="name" maxlength="80" required placeholder="ex.: Relatório de vendas da semana"></label>
+            <label>Emoji <input name="emoji" maxlength="8" value="⭐"></label>
+          </div>
+          <label>Descrição curta <input name="blurb" maxlength="300"></label>
+          <label>Tarefa — use {campo} para perguntar na hora <textarea name="task" rows="3" required placeholder="ex.: Leia {arquivo} e resuma as vendas por produto de {periodo}."></textarea></label>
+          <label>Passo a passo (um por linha, opcional) <textarea name="steps" rows="3"></textarea></label>
+          <div class="row2">
+            <label>Quem recebe <select name="to" class="agent-select-cap"></select></label>
+            <label>Rotina sugerida (cron, opcional) <input name="cadence" placeholder="ex.: 0 8 * * 1"></label>
+          </div>
+          <div class="actions"><button class="btn primary">Salvar receita</button></div>
+        </form>
+      </details>
+    </div>
+
     <div class="tab-body" data-body="belts">
       <p class="muted">Uma esteira leva o resultado de um tripulante ao próximo. <b>Automática</b>: todo resultado final segue sozinho. <b>Manual</b>: o tripulante decide quando passar trabalho.</p>
       <form id="belt-form" class="card form">
@@ -166,6 +197,68 @@
         <div class="actions"><button class="btn primary">Ligar esteira</button></div>
       </form>
       <div id="belt-list" class="list"></div>
+    </div>
+
+    <!-- CADERNO -->
+    <div class="tab-body" data-body="notes">
+      <p class="muted">A memória de longo prazo da tripulação. Notas <b>📌 fixadas</b> entram sempre no contexto do tripulante; as outras ele busca quando precisa.</p>
+      <div class="row filter-row">
+        <select id="notes-agent" aria-label="De quem"></select>
+        <input id="notes-search" type="search" placeholder="Buscar no caderno…" aria-label="Buscar no caderno">
+      </div>
+      <div id="notes-list" class="list"></div>
+      <form id="note-form" class="card form" autocomplete="off">
+        <h3 id="note-form-title">Nova nota</h3>
+        <input type="hidden" name="id">
+        <label>Caderno de <select name="owner" id="note-owner"></select></label>
+        <label>Título <input name="title" maxlength="120" placeholder="ex.: Loja K2e — regras de frete"></label>
+        <label>Texto <textarea name="body" rows="4" required maxlength="8000"></textarea></label>
+        <label class="check"><input type="checkbox" name="pinned"> 📌 Fixar (entra sempre no contexto)</label>
+        <div class="actions">
+          <button class="btn primary" id="note-save">Salvar nota</button>
+          <button type="button" class="btn ghost" id="note-cancel" hidden>Cancelar edição</button>
+        </div>
+      </form>
+      <div class="card form">
+        <h3>Cópia de segurança</h3>
+        <p class="muted">Baixe as notas do caderno escolhido acima. Restaurar só acrescenta: nada que já existe é sobrescrito.</p>
+        <div class="actions">
+          <button type="button" class="btn" id="notes-export">⬇ Exportar</button>
+          <button type="button" class="btn" id="notes-restore">⬆ Restaurar…</button>
+          <input type="file" id="notes-file" accept="application/json,.json" hidden>
+        </div>
+      </div>
+    </div>
+
+    <!-- HABILIDADES -->
+    <div class="tab-body" data-body="skills">
+      <p class="muted">Métodos prontos que o tripulante lê antes de agir (ex.: pesquisa com fontes, depuração sistemática). No contexto entra só a lista; o método completo ele lê quando precisa.</p>
+      <div id="skill-pending"></div>
+      <div class="row filter-row">
+        <select id="skills-agent" aria-label="Tripulante"></select>
+        <input id="skills-search" type="search" placeholder="Buscar habilidade…" aria-label="Buscar habilidade">
+      </div>
+      <div class="actions skill-actions">
+        <span class="muted grow" id="skills-count"></span>
+        <button type="button" class="btn small ghost" id="skills-default">↺ Padrão da função</button>
+        <button type="button" class="btn small primary" id="skills-save">Salvar</button>
+      </div>
+      <div id="skills-list" class="list"></div>
+      <details class="card form" id="skill-new">
+        <summary><b>➕ Criar habilidade</b></summary>
+        <form id="skill-form" class="form" autocomplete="off">
+          <input type="hidden" name="slug">
+          <label>Nome <input name="name" maxlength="80" required></label>
+          <label>Uma linha: quando usar <input name="description" maxlength="300"></label>
+          <label>Categoria <input name="category" maxlength="40" value="Minhas"></label>
+          <label>Método (passos, regras, formato de entrega — Markdown) <textarea name="body" rows="6" required></textarea></label>
+          <div class="actions">
+            <button class="btn primary" id="skill-save">Salvar habilidade</button>
+            <button type="button" class="btn ghost" id="skill-cancel" hidden>Cancelar edição</button>
+          </div>
+        </form>
+      </details>
+      <p class="muted">Créditos: biblioteca portada do StarNet (MIT) — ver <code>skills/NOTICE.md</code>.</p>
     </div>
 
     <!-- AGENDA -->
